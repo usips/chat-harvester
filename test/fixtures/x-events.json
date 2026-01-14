@@ -1,0 +1,33 @@
+{
+    "ChatMessage": {
+        "kind": 1,
+        "payload": "{\"sender\":{\"id\":\"12345\",\"username\":\"TestUser\",\"profile_image_url\":\"https://pbs.twimg.com/profile_images/123/avatar.jpg\",\"verified\":false},\"body\":\"{\\\"uuid\\\":\\\"x-msg-123\\\",\\\"body\\\":\\\"Hello from X!\\\",\\\"timestamp\\\":1705320000000}\"}"
+    },
+    "VerifiedUserMessage": {
+        "kind": 1,
+        "payload": "{\"sender\":{\"id\":\"67890\",\"username\":\"VerifiedPerson\",\"profile_image_url\":\"https://pbs.twimg.com/profile_images/456/avatar.jpg\",\"verified\":true},\"body\":\"{\\\"uuid\\\":\\\"x-msg-456\\\",\\\"body\\\":\\\"Thanks for watching!\\\",\\\"timestamp\\\":1705320060000}\"}"
+    },
+    "WrappedMessage": {
+        "kind": 2,
+        "payload": "{\"kind\":4,\"payload\":\"{\\\"sender\\\":{\\\"id\\\":\\\"11111\\\",\\\"username\\\":\\\"NestedUser\\\",\\\"verified\\\":false},\\\"body\\\":\\\"{\\\\\\\"uuid\\\\\\\":\\\\\\\"x-msg-789\\\\\\\",\\\\\\\"body\\\\\\\":\\\\\\\"Nested message\\\\\\\",\\\\\\\"timestamp\\\\\\\":1705320120000}\\\"}\"}"
+    },
+    "OccupancyUpdate": {
+        "kind": 4,
+        "occupancy": 5432
+    },
+    "Acknowledgement": {
+        "kind": 3,
+        "ack": true
+    },
+    "ParsedSender": {
+        "id": "12345",
+        "username": "TestUser",
+        "profile_image_url": "https://pbs.twimg.com/profile_images/123/avatar.jpg",
+        "verified": false
+    },
+    "ParsedBody": {
+        "uuid": "x-msg-123",
+        "body": "Hello from X!",
+        "timestamp": 1705320000000
+    }
+}

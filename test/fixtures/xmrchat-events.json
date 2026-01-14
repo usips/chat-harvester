@@ -1,0 +1,60 @@
+{
+    "TipMessage": {
+        "id": "tip-123",
+        "name": "GenerousDonor",
+        "message": "Great stream! Keep up the good work!",
+        "createdAt": "2024-01-15T12:00:00.000Z",
+        "private": false,
+        "payment": {
+            "amount": "100000000000",
+            "confirmations": 10
+        }
+    },
+    "PrivateTip": {
+        "id": "tip-456",
+        "name": "AnonymousDonor",
+        "message": "Private message",
+        "createdAt": "2024-01-15T12:01:00.000Z",
+        "private": true,
+        "payment": {
+            "amount": "50000000000",
+            "confirmations": 5
+        }
+    },
+    "LargeTip": {
+        "id": "tip-789",
+        "name": "WhaleDonor",
+        "message": "Here's a big one!",
+        "createdAt": "2024-01-15T12:02:00.000Z",
+        "private": false,
+        "payment": {
+            "amount": "1000000000000",
+            "confirmations": 20
+        }
+    },
+    "TipsPageResponse": [
+        {
+            "id": "tip-123",
+            "name": "GenerousDonor",
+            "message": "Great stream!",
+            "createdAt": "2024-01-15T12:00:00.000Z",
+            "private": false,
+            "payment": {
+                "amount": "100000000000",
+                "confirmations": 10
+            }
+        },
+        {
+            "id": "tip-789",
+            "name": "WhaleDonor",
+            "message": "Here's a big one!",
+            "createdAt": "2024-01-15T12:02:00.000Z",
+            "private": false,
+            "payment": {
+                "amount": "1000000000000",
+                "confirmations": 20
+            }
+        }
+    ],
+    "XmrPriceResponse": "200.00"
+}

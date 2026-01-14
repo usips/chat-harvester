@@ -1,0 +1,67 @@
+{
+    "ChatMessage": {
+        "id": "rumble-msg-123",
+        "time": "2024-01-15T12:00:00.000Z",
+        "user_id": "12345",
+        "text": "Hello from Rumble!",
+        "blocks": []
+    },
+    "ChatMessageWithRant": {
+        "id": "rumble-rant-456",
+        "time": "2024-01-15T12:01:00.000Z",
+        "user_id": "67890",
+        "text": "Great stream! Here's a rant!",
+        "rant": {
+            "price_cents": 500,
+            "duration": 60
+        },
+        "blocks": []
+    },
+    "ChatMessageWithEmote": {
+        "id": "rumble-emote-789",
+        "time": "2024-01-15T12:02:00.000Z",
+        "user_id": "11111",
+        "text": "This is awesome :rumblefire:",
+        "blocks": [
+            {
+                "type": "emote",
+                "data": {
+                    "name": ":rumblefire:",
+                    "file": "https://rumble.com/emotes/rumblefire.png"
+                }
+            }
+        ]
+    },
+    "User": {
+        "id": "12345",
+        "username": "TestViewer",
+        "link": "/user/TestViewer",
+        "is_follower": true,
+        "image.1": "https://rumble.com/avatars/default.png",
+        "badges": []
+    },
+    "UserWithBadges": {
+        "id": "67890",
+        "username": "ModeratorUser",
+        "link": "/user/ModeratorUser",
+        "is_follower": true,
+        "image.1": "https://rumble.com/avatars/mod.png",
+        "badges": [
+            "moderator",
+            "subscriber"
+        ]
+    },
+    "ViewerCount": {
+        "type": "viewers",
+        "data": {
+            "watching_now": 5432
+        }
+    },
+    "InitData": {
+        "type": "init",
+        "data": {
+            "channel_id": 123456,
+            "chat_id": "abc123"
+        }
+    }
+}

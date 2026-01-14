@@ -1,0 +1,111 @@
+{
+  "liveChatTextMessage": {
+    "addChatItemAction": {
+      "item": {
+        "liveChatTextMessageRenderer": {
+          "message": {
+            "runs": [{ "text": "Hello world!" }]
+          },
+          "authorName": { "simpleText": "@TestUser" },
+          "authorPhoto": {
+            "thumbnails": [
+              { "url": "https://example.com/avatar32.jpg", "width": 32, "height": 32 },
+              { "url": "https://example.com/avatar64.jpg", "width": 64, "height": 64 }
+            ]
+          },
+          "id": "ChwKGkNOR1Y4cFdPakpJREZRN1B3Z1FkZmwwWDFn",
+          "timestampUsec": "1768430818333550",
+          "authorExternalChannelId": "UCLtCroX0zcetc1zEaPTLB4A"
+        }
+      }
+    }
+  },
+  "liveChatPaidMessage": {
+    "addChatItemAction": {
+      "item": {
+        "liveChatPaidMessageRenderer": {
+          "message": {
+            "runs": [{ "text": "Thanks for the stream!" }]
+          },
+          "authorName": { "simpleText": "@SuperChatter" },
+          "authorPhoto": {
+            "thumbnails": [
+              { "url": "https://example.com/avatar64.jpg", "width": 64, "height": 64 }
+            ]
+          },
+          "purchaseAmountText": { "simpleText": "$5.00" },
+          "id": "ChwKGkNQdlA3ZFNCakpJREZUemV3Z1FkT0xnYWJ3",
+          "timestampUsec": "1768430820000000",
+          "authorExternalChannelId": "UCTestChannel123"
+        }
+      }
+    }
+  },
+  "liveChatWithEmoji": {
+    "addChatItemAction": {
+      "item": {
+        "liveChatTextMessageRenderer": {
+          "message": {
+            "runs": [
+              { "text": "Hello " },
+              {
+                "emoji": {
+                  "emojiId": "UC_happy",
+                  "image": {
+                    "thumbnails": [{ "url": "https://example.com/emoji.png" }]
+                  }
+                }
+              },
+              { "text": " world!" }
+            ]
+          },
+          "authorName": { "simpleText": "@EmojiUser" },
+          "authorPhoto": {
+            "thumbnails": [{ "url": "https://example.com/avatar.jpg", "width": 64, "height": 64 }]
+          },
+          "id": "emoji-test-id",
+          "timestampUsec": "1768430825000000",
+          "authorExternalChannelId": "UCEmojiTest"
+        }
+      }
+    }
+  },
+  "liveChatWithBadges": {
+    "addChatItemAction": {
+      "item": {
+        "liveChatTextMessageRenderer": {
+          "message": { "runs": [{ "text": "Moderator message" }] },
+          "authorName": { "simpleText": "@ModUser" },
+          "authorPhoto": {
+            "thumbnails": [{ "url": "https://example.com/mod.jpg", "width": 64, "height": 64 }]
+          },
+          "authorBadges": [
+            {
+              "liveChatAuthorBadgeRenderer": {
+                "icon": { "iconType": "MODERATOR" }
+              }
+            },
+            {
+              "liveChatAuthorBadgeRenderer": {
+                "customThumbnail": { "thumbnails": [{ "url": "https://example.com/member.png" }] }
+              }
+            }
+          ],
+          "id": "badge-test-id",
+          "timestampUsec": "1768430830000000",
+          "authorExternalChannelId": "UCBadgeTest"
+        }
+      }
+    }
+  },
+  "injectMessagePayload": {
+    "type": "inject_message",
+    "data": {
+      "id": "external-msg-123",
+      "username": "@ExternalUser",
+      "message": "Hello from another platform!",
+      "avatar": "https://example.com/external-avatar.jpg",
+      "sent_at": 1768430840000
+    }
+  }
+}

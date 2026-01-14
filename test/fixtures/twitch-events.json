@@ -1,0 +1,13 @@
+{
+    "PrivMsg": "@badge-info=subscriber/12;badges=subscriber/12,premium/1;color=#FF4500;display-name=TestUser;emotes=;first-msg=0;id=abc123-def456;mod=0;room-id=12345678;subscriber=1;tmi-sent-ts=1705320000000;turbo=0;user-id=87654321;user-type= :testuser!testuser@testuser.tmi.twitch.tv PRIVMSG #streamerchannel :Hello chat!",
+    "PrivMsgWithEmotes": "@badge-info=;badges=;color=#00FF00;display-name=EmoteUser;emotes=25:0-4;first-msg=0;id=xyz789;mod=0;room-id=12345678;subscriber=0;tmi-sent-ts=1705320060000;turbo=0;user-id=11111111;user-type= :emoteuser!emoteuser@emoteuser.tmi.twitch.tv PRIVMSG #streamerchannel :Kappa this is great",
+    "ModeratorMessage": "@badge-info=subscriber/24;badges=moderator/1,subscriber/24;color=#8A2BE2;display-name=ModUser;emotes=;first-msg=0;id=mod123;mod=1;room-id=12345678;subscriber=1;tmi-sent-ts=1705320120000;turbo=0;user-id=22222222;user-type=mod :moduser!moduser@moduser.tmi.twitch.tv PRIVMSG #streamerchannel :Keep it civil everyone",
+    "BroadcasterMessage": "@badge-info=subscriber/99;badges=broadcaster/1,subscriber/99;color=#9146FF;display-name=StreamerChannel;emotes=;first-msg=0;id=broadcaster123;mod=0;room-id=12345678;subscriber=1;tmi-sent-ts=1705320180000;turbo=0;user-id=12345678;user-type= :streamerchannel!streamerchannel@streamerchannel.tmi.twitch.tv PRIVMSG #streamerchannel :Thanks for watching!",
+    "Ping": "PING :tmi.twitch.tv",
+    "Pong": "PONG :tmi.twitch.tv",
+    "Join": ":testuser!testuser@testuser.tmi.twitch.tv JOIN #streamerchannel",
+    "Part": ":testuser!testuser@testuser.tmi.twitch.tv PART #streamerchannel",
+    "RoomState": "@emote-only=0;followers-only=-1;r9k=0;room-id=12345678;slow=0;subs-only=0 :tmi.twitch.tv ROOMSTATE #streamerchannel",
+    "UserNotice_Sub": "@badge-info=subscriber/0;badges=subscriber/0;color=#FF69B4;display-name=NewSub;emotes=;flags=;id=sub123;login=newsub;mod=0;msg-id=sub;msg-param-cumulative-months=1;msg-param-months=0;msg-param-multimonth-duration=1;msg-param-multimonth-tenure=0;msg-param-should-share-streak=0;msg-param-sub-plan-name=Channel\\sSubscription;msg-param-sub-plan=1000;msg-param-was-gifted=false;room-id=12345678;subscriber=1;system-msg=NewSub\\ssubscribed\\sat\\sTier\\s1.;tmi-sent-ts=1705320240000;user-id=33333333;user-type= :tmi.twitch.tv USERNOTICE #streamerchannel",
+    "ClearChat": "@room-id=12345678;target-user-id=44444444;tmi-sent-ts=1705320300000 :tmi.twitch.tv CLEARCHAT #streamerchannel :banneduser"
+}

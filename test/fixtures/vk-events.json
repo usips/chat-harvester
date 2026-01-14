@@ -1,0 +1,28 @@
+{
+    "ChatMessage": {
+        "sender": {
+            "id": "12345",
+            "username": "TestUser",
+            "profile_image_url": "https://vk.com/images/default_avatar.png",
+            "verified": false
+        },
+        "body": {
+            "uuid": "vk-msg-123",
+            "body": "Привет!",
+            "timestamp": 1705320000000
+        }
+    },
+    "VerifiedUserMessage": {
+        "sender": {
+            "id": "67890",
+            "username": "VKVerified",
+            "profile_image_url": "https://vk.com/images/verified_avatar.png",
+            "verified": true
+        },
+        "body": {
+            "uuid": "vk-msg-456",
+            "body": "Спасибо за стрим!",
+            "timestamp": 1705320060000
+        }
+    }
+}

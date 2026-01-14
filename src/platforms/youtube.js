@@ -54,6 +54,11 @@ export class YouTube extends Seed {
      * @param {object} message - Message data with username, message, avatar, etc.
      */
     injectMessage(message) {
+        if (!message) {
+            this.warn('injectMessage called with null/undefined message');
+            return;
+        }
+
         this._injectCSS();
 
         const container = this._getChatContainer();
@@ -161,8 +166,14 @@ export class YouTube extends Seed {
         }
 
         return Promise.all(actions.map(async (action) => {
+            if (!action?.item) {
+                return null;
+            }
             if (action.item.liveChatTextMessageRenderer !== undefined || action.item.liveChatPaidMessageRenderer !== undefined) {
                 const renderer = action.item.liveChatTextMessageRenderer || action.item.liveChatPaidMessageRenderer;
+                if (!renderer.id || !renderer.authorName || !renderer.authorPhoto?.thumbnails?.length) {
+                    return null; // Skip malformed messages
+                }
                 const message = new ChatMessage(
                     uuidv5(renderer.id, this.namespace),
                     this.platform,
@@ -193,8 +204,9 @@ export class YouTube extends Seed {
                         if (run.text !== undefined) {
                             message.message += run.text;
                         } else if (run.emoji !== undefined) {
+                            const emojiUrl = run.emoji.image?.thumbnails?.at(-1)?.url || '';
                             message.message += `:${run.emoji.emojiId}: `;
-                            message.emojis.push([`:${run.emoji.emojiId}:`, run.emoji.image.thumbnails.at(-1).url, `${run.emoji.emojiId}`]);
+                            message.emojis.push([`:${run.emoji.emojiId}:`, emojiUrl, `${run.emoji.emojiId}`]);
                         } else {
                             this.log('[CHUCK::YouTube] Unknown run.', run);
                         }

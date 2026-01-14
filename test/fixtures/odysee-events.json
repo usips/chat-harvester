@@ -1,0 +1,63 @@
+{
+    "CommentListItem": {
+        "comment_id": "odysee-comment-123",
+        "claim_id": "claim123",
+        "channel_name": "@TestChannel",
+        "channel_url": "lbry://@TestChannel",
+        "comment": "Hello from Odysee!",
+        "timestamp": 1705320000,
+        "is_fiat": false,
+        "support_amount": 0,
+        "is_creator": false
+    },
+    "SuperChatItem": {
+        "comment_id": "odysee-superchat-456",
+        "claim_id": "claim456",
+        "channel_name": "@BigSupporter",
+        "channel_url": "lbry://@BigSupporter",
+        "comment": "Thanks for the great content!",
+        "timestamp": 1705320060,
+        "is_fiat": true,
+        "support_amount": 10.00,
+        "is_creator": false
+    },
+    "CreatorComment": {
+        "comment_id": "odysee-creator-789",
+        "claim_id": "claim789",
+        "channel_name": "@StreamerChannel",
+        "channel_url": "lbry://@StreamerChannel",
+        "comment": "Thanks everyone for watching!",
+        "timestamp": 1705320120,
+        "is_fiat": false,
+        "support_amount": 0,
+        "is_creator": true
+    },
+    "CommentListResponse": {
+        "jsonrpc": "2.0",
+        "result": {
+            "page": 1,
+            "page_size": 50,
+            "total_items": 3,
+            "total_pages": 1,
+            "items": [
+                {
+                    "comment_id": "odysee-comment-123",
+                    "claim_id": "claim123",
+                    "channel_name": "@TestChannel",
+                    "channel_url": "lbry://@TestChannel",
+                    "comment": "Hello from Odysee!",
+                    "timestamp": 1705320000,
+                    "is_fiat": false,
+                    "support_amount": 0,
+                    "is_creator": false
+                }
+            ]
+        }
+    },
+    "ViewerCountUpdate": {
+        "type": "viewer_count",
+        "data": {
+            "connected": 1234
+        }
+    }
+}

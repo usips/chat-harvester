@@ -4,16 +4,19 @@ node_modules/
 # Build output
 dist/
 
-# IDE
+# IDE and tools
 .vscode/
 .idea/
-
-# Claude
 .claude/
+*.code-workspace
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Coverage
+# Test coverage
 coverage/
+
+# Logs
+*.log
+npm-debug.log*
