@@ -159,6 +159,40 @@ export class Seed {
 
     onChatSocketMessage(ws, event) {
         this._debug('Chat socket received data.', event);
+
+        try {
+            const command = JSON.parse(event.data);
+            if (command.type) {
+                this.handleServerCommand(command.type, command.data);
+            }
+        } catch (e) {
+            this._debug('Could not parse server message as JSON:', e);
+        }
+    }
+
+    /**
+     * Handle commands received from the server
+     * Subclasses can override to add custom command handlers
+     * @param {string} type - The command type
+     * @param {object} data - The command payload
+     */
+    handleServerCommand(type, data) {
+        switch (type) {
+            case 'inject_message':
+                this.injectMessage(data);
+                break;
+            default:
+                this._debug('Unknown server command:', type, data);
+        }
+    }
+
+    /**
+     * Inject an external message into the chat UI
+     * Subclasses should override this to implement platform-specific injection
+     * @param {object} message - Message data (ChatMessage-like structure)
+     */
+    injectMessage(message) {
+        this._debug('injectMessage not implemented for this platform:', message);
     }
 
     onChatSocketClose(ws, event) {

@@ -18,9 +18,89 @@ export class YouTube extends Seed {
     static altHostname = 'www.youtube.com';
     static namespace = 'fd60ac36-d6b5-49dc-aee6-b0d87d130582';
 
+    _cssInjected = false;
+
     constructor() {
         const channel = null; // Cannot be determined before DOM is ready
         super(YouTube.namespace, 'YouTube', channel);
+    }
+
+    /**
+     * Inject CSS styles for external messages
+     */
+    _injectCSS() {
+        if (this._cssInjected) return;
+
+        const style = document.createElement('style');
+        style.textContent = `
+            .chuck-external {
+                background-color: rgba(128, 0, 128, 0.3) !important;
+            }
+        `;
+        document.head.appendChild(style);
+        this._cssInjected = true;
+    }
+
+    /**
+     * Find the chat items container
+     * @returns {Element|null}
+     */
+    _getChatContainer() {
+        return document.querySelector('yt-live-chat-item-list-renderer #items');
+    }
+
+    /**
+     * Inject an external message into the YouTube live chat
+     * @param {object} message - Message data with username, message, avatar, etc.
+     */
+    injectMessage(message) {
+        this._injectCSS();
+
+        const container = this._getChatContainer();
+        if (!container) {
+            this.warn('Could not find chat container for message injection');
+            return;
+        }
+
+        const id = message.id || `chuck-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const timestamp = new Date(message.sent_at || Date.now()).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const username = message.username || 'External';
+        const avatar = message.avatar || 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        const text = message.message || '';
+
+        // Create the message element
+        const renderer = document.createElement('yt-live-chat-text-message-renderer');
+        renderer.className = 'style-scope yt-live-chat-item-list-renderer chuck-external';
+        renderer.setAttribute('modern', '');
+        renderer.id = id;
+
+        renderer.innerHTML = `
+            <yt-img-shadow id="author-photo" class="no-transition style-scope yt-live-chat-text-message-renderer" height="24" width="24" style="background-color: transparent;">
+                <img id="img" draggable="false" class="style-scope yt-img-shadow" alt="" height="24" width="24" src="${avatar}">
+            </yt-img-shadow>
+            <div id="content" class="style-scope yt-live-chat-text-message-renderer">
+                <span id="timestamp" class="style-scope yt-live-chat-text-message-renderer">${timestamp}</span>
+                <yt-live-chat-author-chip class="style-scope yt-live-chat-text-message-renderer">
+                    <span id="prepend-chat-badges" class="style-scope yt-live-chat-author-chip"></span>
+                    <span id="author-name" dir="auto" class="style-scope yt-live-chat-author-chip">${username}<span id="chip-badges" class="style-scope yt-live-chat-author-chip"></span></span>
+                    <span id="chat-badges" class="style-scope yt-live-chat-author-chip"></span>
+                </yt-live-chat-author-chip>
+                <span id="message" dir="auto" class="style-scope yt-live-chat-text-message-renderer">${text}</span>
+            </div>
+        `;
+
+        container.appendChild(renderer);
+
+        // Scroll to bottom if user is near bottom
+        const scroller = document.querySelector('yt-live-chat-item-list-renderer #item-scroller');
+        if (scroller) {
+            const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 100;
+            if (isNearBottom) {
+                scroller.scrollTop = scroller.scrollHeight;
+            }
+        }
+
+        this.log('Injected external message:', username, text);
     }
 
     prepareChatMessages(actions) {
