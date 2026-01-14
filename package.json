@@ -1,0 +1,48 @@
+{
+  "name": "chat-harvester",
+  "version": "1.0.0",
+  "description": "CHUCK - Chat Harvesting Universal Connection Kit. Multi-platform livestream chat scraper.",
+  "main": "src/userscript.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:fuzz": "vitest run --testNamePattern='Fuzzing'",
+    "build": "npm run build:userscript && npm run build:extension",
+    "build:userscript": "webpack --config webpack.userscript.js",
+    "build:extension": "npm run build:extension:chrome && npm run build:extension:firefox",
+    "build:extension:chrome": "webpack --config webpack.extension.js --env target=chrome",
+    "build:extension:firefox": "webpack --config webpack.extension.js --env target=firefox",
+    "watch:userscript": "webpack --config webpack.userscript.js --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usips/chat-harvester.git"
+  },
+  "keywords": [
+    "chat",
+    "livestream",
+    "scraper",
+    "userscript",
+    "extension",
+    "kick",
+    "youtube",
+    "twitch",
+    "rumble"
+  ],
+  "author": "Joshua Moon <josh@josh.rs>",
+  "license": "BSD-3-Clause",
+  "bugs": {
+    "url": "https://github.com/usips/chat-harvester/issues"
+  },
+  "homepage": "https://github.com/usips/chat-harvester#readme",
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.17",
+    "copy-webpack-plugin": "^12.0.0",
+    "fast-check": "^4.5.3",
+    "jsdom": "^27.4.0",
+    "vitest": "^4.0.17",
+    "webpack": "^5.101.3",
+    "webpack-cli": "^6.0.1"
+  }
+}
