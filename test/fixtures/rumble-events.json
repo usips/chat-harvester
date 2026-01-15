@@ -63,5 +63,44 @@
             "channel_id": 123456,
             "chat_id": "abc123"
         }
+    },
+    "GiftPurchaseNotification": {
+        "id": "2403846329322621779",
+        "time": "2026-01-15T16:07:01+00:00",
+        "user_id": "88707682",
+        "text": "",
+        "blocks": [{"type": "text.1", "data": {"text": ""}}],
+        "gift_purchase_notification": {
+            "gift_type": "rumble",
+            "total_gifts": 5,
+            "creator_user_id": 93539984,
+            "creator_channel_id": 2358904
+        }
+    },
+    "GiftPurchaseUser": {
+        "id": "88707682",
+        "username": "GenerousGifter",
+        "link": "/user/GenerousGifter",
+        "is_follower": true,
+        "image.1": "https://rumble.com/avatars/gifter.png",
+        "badges": ["recurring_subscription", "whale-yellow"]
+    },
+    "SubscriptionNotification": {
+        "id": "rumble-sub-notification-123",
+        "time": "2026-01-15T16:08:00+00:00",
+        "user_id": "99999",
+        "text": "",
+        "blocks": [],
+        "notification": {
+            "type": "subscription"
+        }
+    },
+    "SubscriptionUser": {
+        "id": "99999",
+        "username": "NewSubscriber",
+        "link": "/user/NewSubscriber",
+        "is_follower": true,
+        "image.1": "https://rumble.com/avatars/sub.png",
+        "badges": ["recurring_subscription"]
     }
 }

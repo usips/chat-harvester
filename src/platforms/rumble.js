@@ -146,7 +146,10 @@ export class Rumble extends Seed {
 
     prepareSubscriptions(messages, users) {
         return Promise.all(messages
-            .filter(messageData => messageData.hasOwnProperty('notification'))
+            .filter(messageData =>
+                messageData.hasOwnProperty('notification') ||
+                messageData.hasOwnProperty('gift_purchase_notification')
+            )
             .map(async (messageData, index) => {
                 const user = users.find((user) => user.id === messageData.user_id);
                 if (user === undefined) {
@@ -154,6 +157,19 @@ export class Rumble extends Seed {
                     return;
                 }
 
+                // Gift subscription purchase
+                if (messageData.gift_purchase_notification) {
+                    const gift = messageData.gift_purchase_notification;
+                    return {
+                        id: messageData.id,
+                        gifted: true,
+                        buyer: user.username,
+                        count: gift.total_gifts || 1,
+                        value: 5
+                    };
+                }
+
+                // Regular subscription notification
                 return {
                     id: messageData.id,
                     gifted: false,

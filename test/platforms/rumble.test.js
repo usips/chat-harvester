@@ -84,4 +84,70 @@ describe('Rumble Platform', () => {
             expect(user.badges).toContain('subscriber');
         });
     });
+
+    describe('prepareSubscriptions', () => {
+        let rumble;
+
+        beforeEach(() => {
+            rumble = Object.create(Rumble.prototype);
+            rumble.platform = 'Rumble';
+            rumble.channel = 123456;
+            rumble.namespace = Rumble.namespace;
+            rumble.log = vi.fn();
+        });
+
+        it('should parse gift_purchase_notification as gifted subscription', async () => {
+            const messages = [rumbleEvents.GiftPurchaseNotification];
+            const users = [rumbleEvents.GiftPurchaseUser];
+
+            const result = await rumble.prepareSubscriptions(messages, users);
+
+            expect(result).toHaveLength(1);
+            expect(result[0]).toEqual({
+                id: '2403846329322621779',
+                gifted: true,
+                buyer: 'GenerousGifter',
+                count: 5,
+                value: 5
+            });
+        });
+
+        it('should parse notification as regular subscription', async () => {
+            const messages = [rumbleEvents.SubscriptionNotification];
+            const users = [rumbleEvents.SubscriptionUser];
+
+            const result = await rumble.prepareSubscriptions(messages, users);
+
+            expect(result).toHaveLength(1);
+            expect(result[0]).toEqual({
+                id: 'rumble-sub-notification-123',
+                gifted: false,
+                buyer: 'NewSubscriber',
+                count: 1,
+                value: 5
+            });
+        });
+
+        it('should filter out regular chat messages', async () => {
+            const messages = [rumbleEvents.ChatMessage, rumbleEvents.GiftPurchaseNotification];
+            const users = [rumbleEvents.User, rumbleEvents.GiftPurchaseUser];
+
+            const result = await rumble.prepareSubscriptions(messages, users);
+
+            // Should only have the gift notification, not the regular chat
+            expect(result).toHaveLength(1);
+            expect(result[0].gifted).toBe(true);
+        });
+
+        it('should handle missing user gracefully', async () => {
+            const messages = [rumbleEvents.GiftPurchaseNotification];
+            const users = []; // No matching user
+
+            const result = await rumble.prepareSubscriptions(messages, users);
+
+            expect(result).toHaveLength(1);
+            expect(result[0]).toBeUndefined();
+            expect(rumble.log).toHaveBeenCalledWith('User not found:', '88707682');
+        });
+    });
 });
