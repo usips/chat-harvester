@@ -137,62 +137,53 @@ export class Facebook extends Seed {
         try {
             // Facebook uses MQTT over WebSocket - data is binary
             if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
-                this.recorder.recordWebSocket(
-                    ws.url,
+                this.recordWebSocketUnhandled(
+                    ws,
+                    'in',
                     '[Binary MQTT data]',
-                    EventStatus.UNHANDLED,
-                    { dataType: 'binary', size: event.data.size || event.data.byteLength },
                     'mqtt_binary'
                 );
             } else {
-                // Text data - try to parse as JSON
+                // Text data - could be numeric-indexed JSON (Gateway protocol)
                 try {
                     const json = JSON.parse(event.data);
-                    this.recorder.recordWebSocket(
-                        ws.url,
-                        event.data,
-                        EventStatus.UNHANDLED,
-                        { type: json.type || 'unknown' },
-                        'json'
-                    );
+
+                    // Check if it's the Gateway numeric-indexed format
+                    if (typeof json['0'] === 'number' && Object.keys(json).length > 10) {
+                        // Decode byte array to string (skip first 6 bytes header)
+                        let decoded = '';
+                        for (let i = 6; i < Object.keys(json).length; i++) {
+                            if (json[String(i)] !== undefined) {
+                                decoded += String.fromCharCode(json[String(i)]);
+                            }
+                        }
+
+                        // Check for comment-related events
+                        if (decoded.includes('streaming_comment') || decoded.includes('client_receive')) {
+                            this.recordWebSocketUnhandled(ws, 'in', decoded, 'gateway_comment_event');
+                        } else if (decoded.includes('STREAMING_REACTION')) {
+                            this.recordWebSocketUnhandled(ws, 'in', decoded, 'gateway_reaction');
+                        } else {
+                            this.recordWebSocketUnhandled(ws, 'in', decoded.slice(0, 1000), 'gateway_message');
+                        }
+                    } else {
+                        this.recordWebSocketUnhandled(ws, 'in', event.data, 'json');
+                    }
                 } catch {
-                    this.recorder.recordWebSocket(
-                        ws.url,
-                        event.data,
-                        EventStatus.UNHANDLED,
-                        null,
-                        'text'
-                    );
+                    this.recordWebSocketUnhandled(ws, 'in', event.data, 'text');
                 }
             }
         } catch (e) {
-            this.recorder.recordWebSocket(
-                ws.url,
-                String(event.data).slice(0, 1000),
-                EventStatus.ERROR,
-                null,
-                'error',
-                e.message
-            );
+            this.log('WebSocket message error:', e);
         }
     }
 
     onWebSocketOpen(ws) {
         this.log('WebSocket opened:', ws.url);
-        this.recorder.record('websocket_open', {
-            url: ws.url,
-            timestamp: Date.now()
-        }, EventStatus.HANDLED, null);
     }
 
     onWebSocketClose(ws, event) {
-        this.log('WebSocket closed:', ws.url);
-        this.recorder.record('websocket_close', {
-            url: ws.url,
-            code: event.code,
-            reason: event.reason,
-            timestamp: Date.now()
-        }, EventStatus.HANDLED, null);
+        this.log('WebSocket closed:', ws.url, 'code:', event.code);
     }
 
     async onFetchResponse(response) {
