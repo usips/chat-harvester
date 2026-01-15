@@ -151,10 +151,31 @@ export class Facebook extends Seed {
                     }
                 }
 
+                // Check if this contains a live comment
+                if (text.includes('live_video_comment_create_subscribe')) {
+                    // Extract JSON from binary - skip MQTT header bytes
+                    const jsonStart = text.indexOf('{"data"');
+                    if (jsonStart >= 0) {
+                        const jsonStr = text.slice(jsonStart);
+                        try {
+                            const data = JSON.parse(jsonStr);
+                            const comment = data?.data?.live_video_comment_create_subscribe?.comment;
+                            if (comment) {
+                                const msg = this.parseComment(comment);
+                                if (msg && msg.message) {
+                                    this.sendChatMessages([msg]);
+                                    this.recordWebSocketHandled(ws, 'in', jsonStr.slice(0, 500), 'live_comment');
+                                    return;
+                                }
+                            }
+                        } catch { /* JSON parse failed */ }
+                    }
+                }
+
                 this.recordWebSocketUnhandled(
                     ws,
                     'in',
-                    JSON.stringify({ hex: hex.slice(0, 2000), text: text.slice(0, 1000), size: bytes.length }),
+                    JSON.stringify({ hex: hex.slice(0, 2000), text: text.slice(0, 2000), size: bytes.length }),
                     'mqtt_binary'
                 );
             } else if (event.data instanceof Blob) {
