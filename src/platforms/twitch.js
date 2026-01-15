@@ -232,11 +232,105 @@ export class Twitch extends Seed {
             return;
         }
 
-        // IRC messages can be batched with \r\n
-        const lines = data.split('\r\n').filter(l => l);
+        // Route to appropriate handler based on WebSocket URL
+        const wsUrl = ws.url || '';
+        if (wsUrl.includes('hermes.twitch.tv')) {
+            this.processHermesMessage(ws, data);
+        } else {
+            // IRC messages can be batched with \r\n
+            const lines = data.split('\r\n').filter(l => l);
+            for (const line of lines) {
+                this.processIrcLine(ws, line);
+            }
+        }
+    }
 
-        for (const line of lines) {
-            this.processIrcLine(ws, line);
+    /**
+     * Process Hermes PubSub WebSocket messages
+     * @param {WebSocket} ws - WebSocket instance
+     * @param {string} data - Message data
+     */
+    processHermesMessage(ws, data) {
+        let json;
+        try {
+            json = JSON.parse(data);
+        } catch (e) {
+            this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_INVALID', 'Invalid JSON');
+            return;
+        }
+
+        const msgType = json.type;
+
+        switch (msgType) {
+            case 'notification': {
+                this.processHermesNotification(ws, data, json);
+                break;
+            }
+
+            case 'keepalive': {
+                this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_KEEPALIVE', 'Heartbeat');
+                break;
+            }
+
+            case 'subscribeResponse': {
+                this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_SUBSCRIBE', 'Subscription confirmation');
+                break;
+            }
+
+            default: {
+                this.recordWebSocketIgnored(ws, 'in', data, `HERMES_${msgType?.toUpperCase() || 'UNKNOWN'}`, 'Unhandled Hermes message type');
+            }
+        }
+    }
+
+    /**
+     * Process Hermes notification messages
+     * @param {WebSocket} ws - WebSocket instance
+     * @param {string} data - Raw message data
+     * @param {Object} json - Parsed message
+     */
+    processHermesNotification(ws, data, json) {
+        const pubsubData = json.notification?.pubsub;
+        if (!pubsubData) {
+            this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_NOTIFICATION', 'No pubsub data');
+            return;
+        }
+
+        let pubsub;
+        try {
+            pubsub = JSON.parse(pubsubData);
+        } catch (e) {
+            this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_NOTIFICATION', 'Invalid pubsub JSON');
+            return;
+        }
+
+        const pubsubType = pubsub.type;
+
+        switch (pubsubType) {
+            case 'viewcount': {
+                const viewers = pubsub.viewers;
+                if (typeof viewers === 'number') {
+                    this.sendViewerCount(viewers);
+                    this.recordWebSocketHandled(ws, 'in', data, 'HERMES_VIEWCOUNT');
+                } else {
+                    this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_VIEWCOUNT', 'Invalid viewer count');
+                }
+                break;
+            }
+
+            case 'chat_rich_embed': {
+                this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_CHAT_EMBED', 'Chat embed/clip');
+                break;
+            }
+
+            case 'commercial': {
+                this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_COMMERCIAL', 'Commercial break');
+                break;
+            }
+
+            default: {
+                this.recordWebSocketIgnored(ws, 'in', data, `HERMES_PUBSUB_${pubsubType?.toUpperCase() || 'UNKNOWN'}`, 'Unhandled pubsub type');
+            }
         }
     }
 
