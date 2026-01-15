@@ -455,6 +455,16 @@ export class Twitch extends Seed {
         const reason = parsed.command || 'IRC_SEND';
         this.recordWebSocketIgnored(ws, 'out', message, reason, 'Outgoing IRC command');
     }
+
+    /**
+     * Handle fetch responses - ignore Twitch API/GQL calls
+     * @param {Response} response - Fetch response
+     */
+    async onFetchResponse(response) {
+        // Twitch uses GQL for most API calls - we don't need any of them
+        // Chat comes through IRC WebSocket, viewer counts through Hermes
+        this.recordFetchIgnored(response.url, 'GET', response.status, 'Twitch API/GQL');
+    }
 }
 
 export default Twitch;
