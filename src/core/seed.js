@@ -134,19 +134,29 @@ export class Seed {
     // Chat Socket
     //
     createChatSocket() {
-        if (this.chatSocket !== null && this.chatSocket.readyState === WebSocket.OPEN) {
-            this.log('Chat socket already exists and is open.');
-        } else {
-            this.log('Creating chat socket.');
-            const ws = new WebSocket.oldWebSocket(this.serverUrl);
-            ws.addEventListener('open', (event) => this.onChatSocketOpen(ws, event));
-            ws.addEventListener('message', (event) => this.onChatSocketMessage(ws, event));
-            ws.addEventListener('close', (event) => this.onChatSocketClose(ws, event));
-            ws.addEventListener('error', (event) => this.onChatSocketError(ws, event));
-
-            ws.chuck_socket = true;
-            this.chatSocket = ws;
+        // Clear any pending reconnect timeout
+        if (this.chatSocketTimeout) {
+            clearTimeout(this.chatSocketTimeout);
+            this.chatSocketTimeout = null;
         }
+
+        // Don't create if already open or connecting
+        if (this.chatSocket !== null &&
+            (this.chatSocket.readyState === WebSocket.OPEN ||
+             this.chatSocket.readyState === WebSocket.CONNECTING)) {
+            this.log('Chat socket already exists and is open/connecting.');
+            return this.chatSocket;
+        }
+
+        this.log('Creating chat socket.');
+        const ws = new WebSocket.oldWebSocket(this.serverUrl);
+        ws.addEventListener('open', (event) => this.onChatSocketOpen(ws, event));
+        ws.addEventListener('message', (event) => this.onChatSocketMessage(ws, event));
+        ws.addEventListener('close', (event) => this.onChatSocketClose(ws, event));
+        ws.addEventListener('error', (event) => this.onChatSocketError(ws, event));
+
+        ws.chuck_socket = true;
+        this.chatSocket = ws;
 
         return this.chatSocket;
     }
@@ -197,13 +207,17 @@ export class Seed {
 
     onChatSocketClose(ws, event) {
         this._debug('Chat socket closed.', event);
-        this.chatSocketTimeout = setTimeout(() => this.createChatSocket(), 3000);
+        // Only schedule reconnect if this is our current socket
+        if (ws === this.chatSocket) {
+            this.chatSocket = null;
+            if (this.chatSocketTimeout) clearTimeout(this.chatSocketTimeout);
+            this.chatSocketTimeout = setTimeout(() => this.createChatSocket(), 3000);
+        }
     }
 
     onChatSocketError(ws, event) {
         this._debug('Chat socket errored.', event);
         ws.close();
-        this.chatSocketTimeout = setTimeout(() => this.createChatSocket(), 3000);
     }
 
     //
