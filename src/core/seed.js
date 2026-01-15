@@ -322,6 +322,8 @@ export class Seed {
                 const newData = data.clone();
                 self.onFetchResponse(newData);
                 return data;
+            }).catch(() => {
+                // Silently ignore fetch failures (ad blockers, network errors, CORS, etc.)
             });
             return response;
         };
