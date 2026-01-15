@@ -166,6 +166,41 @@ describe('Twitch Platform', () => {
         });
     });
 
+    describe('updateChannelFromParams', () => {
+        let twitch;
+
+        beforeEach(() => {
+            twitch = Object.create(Twitch.prototype);
+            twitch.channel = 'oldchannel';
+            twitch.log = vi.fn();
+        });
+
+        it('should update channel from IRC params', () => {
+            twitch.updateChannelFromParams(['#newchannel']);
+            expect(twitch.channel).toBe('newchannel');
+            expect(twitch.log).toHaveBeenCalledWith('Channel changed: oldchannel → newchannel');
+        });
+
+        it('should not update if channel is the same', () => {
+            twitch.updateChannelFromParams(['#oldchannel']);
+            expect(twitch.channel).toBe('oldchannel');
+            expect(twitch.log).not.toHaveBeenCalled();
+        });
+
+        it('should handle empty params', () => {
+            twitch.updateChannelFromParams([]);
+            expect(twitch.channel).toBe('oldchannel');
+
+            twitch.updateChannelFromParams(null);
+            expect(twitch.channel).toBe('oldchannel');
+        });
+
+        it('should handle params without # prefix', () => {
+            twitch.updateChannelFromParams(['nochannel']);
+            expect(twitch.channel).toBe('oldchannel');
+        });
+    });
+
     describe('parseEmotes', () => {
         let twitch;
 

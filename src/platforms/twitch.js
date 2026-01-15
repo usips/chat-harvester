@@ -136,6 +136,23 @@ export class Twitch extends Seed {
     }
 
     /**
+     * Update channel from IRC params if changed (handles SPA navigation)
+     * @param {Array} params - IRC message params (first is #channel)
+     */
+    updateChannelFromParams(params) {
+        if (!params || params.length === 0) return;
+
+        const ircChannel = params[0];
+        if (!ircChannel || !ircChannel.startsWith('#')) return;
+
+        const newChannel = ircChannel.slice(1); // Remove leading #
+        if (newChannel && newChannel !== this.channel) {
+            this.log(`Channel changed: ${this.channel} → ${newChannel}`);
+            this.channel = newChannel;
+        }
+    }
+
+    /**
      * Parse Twitch emotes string into array
      * Format: emote_id:start-end,start-end/emote_id:start-end
      * @param {string} emotesStr - Emotes string from IRC tags
@@ -350,6 +367,9 @@ export class Twitch extends Seed {
 
         switch (parsed.command) {
             case 'PRIVMSG': {
+                // Update channel from IRC params if it changed (SPA navigation)
+                this.updateChannelFromParams(parsed.params);
+
                 const message = this.prepareChatMessage(parsed);
                 if (message) {
                     this.sendChatMessages([message]);
