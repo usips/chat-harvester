@@ -3,29 +3,134 @@
  * Facebook platform scraper
  *
  * Features:
+ * - Capture sent messages via GraphQL comment_create
  * - Capture WebSocket traffic (MQTT over WebSocket)
- * - Capture fetch/XHR traffic for analysis
- * - Record all data for protocol analysis
+ * - Parse user badges (moderator, verified, top_fan, etc.)
  *
- * NOTE: This is a discovery/recording platform. Facebook uses complex
- * MQTT-based protocols that require further analysis.
+ * Protocol notes:
+ * - Comments are sent via GraphQL mutation (comment_create)
+ * - Incoming comments arrive via binary MQTT WebSocket (gateway.facebook.com)
+ * - Comment IDs are base64 encoded: "comment:VIDEO_ID_COMMENT_ID"
+ * - Reactions use FEEDBACK_ADD_STREAMING_REACTION_SUBSCRIBE subscription
  */
 
-import { Seed, EventStatus } from '../core/index.js';
+import { Seed, ChatMessage, uuidv5, EventStatus } from '../core/index.js';
 
 export class Facebook extends Seed {
     static hostname = 'facebook.com';
     static namespace = '8f14e45f-ceea-467f-a184-bd5f3c4b7f2a';
 
     constructor() {
-        // Extract video ID or page name from URL if possible
+        // Extract video ID from URL: /username/videos/VIDEO_ID or /watch/live/?v=VIDEO_ID
         const urlParts = window.location.pathname.split('/').filter(x => x);
-        const channel = urlParts[0] || 'facebook';
+        let channel = urlParts[0] || 'facebook';
+
+        // Try to get video ID from path
+        const videoIndex = urlParts.indexOf('videos');
+        if (videoIndex >= 0 && urlParts[videoIndex + 1]) {
+            channel = urlParts[videoIndex + 1];
+        }
+
+        // Try to get from query param
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('v')) {
+            channel = urlParams.get('v');
+        }
+
         super(Facebook.namespace, 'Facebook', channel);
     }
 
     onDocumentReady() {
-        this.log('Facebook platform initialized for traffic capture');
+        this.log('Facebook platform initialized');
+    }
+
+    /**
+     * Parse a comment from GraphQL comment_create response
+     */
+    parseComment(commentData) {
+        if (!commentData || !commentData.id) return null;
+
+        const message = new ChatMessage(
+            uuidv5(commentData.id, this.namespace),
+            this.platform,
+            this.channel
+        );
+
+        // Message content
+        message.message = commentData.preferred_body?.text ||
+                         commentData.body?.text || '';
+
+        // Author info
+        const author = commentData.author;
+        if (author) {
+            message.username = author.name || 'Unknown';
+            message.avatar = author.profile_picture_depth_0?.uri ||
+                           author.profile_picture_depth_1?.uri;
+            message.is_verified = author.is_verified || false;
+        }
+
+        // Timestamp
+        if (commentData.created_time) {
+            message.sent_at = commentData.created_time * 1000;
+        }
+
+        // Parse badges from discoverable_identity_badges_web
+        if (commentData.discoverable_identity_badges_web) {
+            for (const badge of commentData.discoverable_identity_badges_web) {
+                if (!badge.is_earned && !badge.is_enabled) continue;
+
+                switch (badge.identity_badge_type) {
+                    case 'moderator':
+                        message.is_mod = true;
+                        break;
+                    case 'top_fan':
+                    case 'rising_fan':
+                    case 'tipper':
+                        message.is_sub = true;
+                        break;
+                    case 'gaming_partner':
+                        message.is_owner = true;
+                        break;
+                }
+            }
+        }
+
+        // Also check identity_badges_web for earned badges
+        if (commentData.identity_badges_web) {
+            for (const badge of commentData.identity_badges_web) {
+                switch (badge.identity_badge_type) {
+                    case 'moderator':
+                        message.is_mod = true;
+                        break;
+                    case 'top_fan':
+                    case 'rising_fan':
+                    case 'tipper':
+                        message.is_sub = true;
+                        break;
+                }
+            }
+        }
+
+        return message;
+    }
+
+    /**
+     * Handle GraphQL response containing comment data
+     */
+    handleGraphQLResponse(json) {
+        if (!json || !json.data) return false;
+
+        // Handle comment_create (sent message confirmation)
+        if (json.data.comment_create?.comment) {
+            const comment = json.data.comment_create.comment;
+            const message = this.parseComment(comment);
+            if (message && message.message) {
+                this.sendChatMessages([message]);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     onWebSocketMessage(ws, event) {
@@ -97,50 +202,36 @@ export class Facebook extends Seed {
             // Capture GraphQL requests
             if (url.pathname.includes('/api/graphql') || url.pathname.includes('/graphql')) {
                 const cloned = response.clone();
+                let handled = false;
+                let json = null;
+
                 try {
-                    const json = await cloned.json();
-                    this.recorder.recordFetch(
-                        response.url,
-                        'POST',
-                        response.status,
-                        json,
-                        EventStatus.UNHANDLED,
-                        { endpoint: 'graphql' },
-                        'graphql'
-                    );
+                    json = await cloned.json();
+                    if (json) {
+                        handled = this.handleGraphQLResponse(json);
+                    }
                 } catch {
-                    this.recorder.recordFetch(
-                        response.url,
-                        'POST',
-                        response.status,
-                        null,
-                        EventStatus.UNHANDLED,
-                        { endpoint: 'graphql', parseError: true },
-                        'graphql'
-                    );
+                    // JSON parse error
                 }
+
+                this.recorder.recordFetch(
+                    response.url,
+                    'POST',
+                    response.status,
+                    json,
+                    handled ? EventStatus.HANDLED : EventStatus.UNHANDLED,
+                    { endpoint: 'graphql', hasComment: handled },
+                    'graphql'
+                );
                 return;
             }
 
-            // Capture live-related endpoints
-            if (url.pathname.includes('/live') ||
-                url.pathname.includes('/video') ||
-                url.pathname.includes('/comment')) {
-                const cloned = response.clone();
-                try {
-                    const text = await cloned.text();
-                    this.recorder.recordFetch(
-                        response.url,
-                        'GET',
-                        response.status,
-                        text.slice(0, 5000),
-                        EventStatus.UNHANDLED,
-                        { endpoint: url.pathname },
-                        'live_endpoint'
-                    );
-                } catch {
-                    this.recordFetchIgnored(response.url, 'GET', response.status, 'Parse failed');
-                }
+            // Ignore video/audio segment fetches
+            if (url.hostname.includes('video-') ||
+                url.pathname.includes('.m4v') ||
+                url.pathname.includes('.m4a') ||
+                url.pathname.includes('.mpd')) {
+                this.recordFetchIgnored(response.url, 'GET', response.status, 'Media segment');
                 return;
             }
 
@@ -159,13 +250,31 @@ export class Facebook extends Seed {
 
             // Capture GraphQL XHR
             if (url.pathname.includes('/api/graphql') || url.pathname.includes('/graphql')) {
+                let handled = false;
+                let json = null;
+
+                try {
+                    // Parse response - could be string or object depending on responseType
+                    if (typeof xhr.response === 'string') {
+                        json = JSON.parse(xhr.response);
+                    } else if (typeof xhr.response === 'object') {
+                        json = xhr.response;
+                    }
+
+                    if (json) {
+                        handled = this.handleGraphQLResponse(json);
+                    }
+                } catch (e) {
+                    // JSON parse error
+                }
+
                 this.recorder.recordXhr(
                     xhr.responseURL,
                     'POST',
                     xhr.status,
-                    xhr.response,
-                    EventStatus.UNHANDLED,
-                    { endpoint: 'graphql' },
+                    json,
+                    handled ? EventStatus.HANDLED : EventStatus.UNHANDLED,
+                    { endpoint: 'graphql', hasComment: handled },
                     'graphql_xhr'
                 );
                 return;
