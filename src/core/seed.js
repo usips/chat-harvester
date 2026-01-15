@@ -288,6 +288,8 @@ export class Seed {
     // EventSource Patching
     //
     eventSourcePatch() {
+        if (WINDOW.EventSource.chuck_patched) return WINDOW.EventSource;
+
         const self = this;
         const oldEventSource = WINDOW.EventSource;
         const newEventSource = function(url, config) {
@@ -313,6 +315,8 @@ export class Seed {
     // Fetch Patching
     //
     fetchPatch() {
+        if (WINDOW.fetch.chuck_patched) return WINDOW.fetch;
+
         const self = this;
         const oldFetch = WINDOW.fetch;
         const newFetch = function(...args) {
@@ -357,6 +361,8 @@ export class Seed {
     // WebSocket Patching
     //
     webSocketPatch() {
+        if (WINDOW.WebSocket.chuck_patched) return WINDOW.WebSocket;
+
         const self = this;
         const oldWebSocket = WINDOW.WebSocket;
         const newWebSocket = function(url, protocols) {
@@ -425,6 +431,8 @@ export class Seed {
     // XHR Patching
     //
     xhrPatch() {
+        if (WINDOW.XMLHttpRequest.prototype.open.chuck_patched) return WINDOW.XMLHttpRequest;
+
         const self = this;
 
         const oldXhrOpen = WINDOW.XMLHttpRequest.prototype.open;
