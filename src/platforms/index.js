@@ -6,6 +6,7 @@
 import { Config, WINDOW } from '../core/index.js';
 
 // Import all platforms
+import Facebook from './facebook.js';
 import Kick from './kick.js';
 import Odysee from './odysee.js';
 import Rumble from './rumble.js';
@@ -63,6 +64,10 @@ export async function detectPlatform() {
  * Initialize all platform registrations
  */
 export function registerAllPlatforms() {
+    // Facebook
+    registerPlatform('facebook.com', Facebook);
+    registerPlatform('www.facebook.com', Facebook);
+
     // Kick
     registerPlatform('kick.com', Kick);
 
@@ -93,6 +98,7 @@ export function registerAllPlatforms() {
 
 // Export platform classes for direct use
 export {
+    Facebook,
     Kick,
     Odysee,
     Rumble,

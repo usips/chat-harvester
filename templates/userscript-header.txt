@@ -8,6 +8,8 @@
 // @updateURL https://raw.githubusercontent.com/usips/chat-harvester/master/dist/chuck.user.js
 // @homepageURL https://github.com/usips/chat-harvester
 // @supportURL https://github.com/usips/chat-harvester/issues
+// @match https://facebook.com/*
+// @match https://www.facebook.com/*
 // @match https://kick.com/*
 // @match https://kick.com/*/chatroom
 // @match https://odysee.com/*
