@@ -74,6 +74,7 @@ export function registerAllPlatforms() {
 
     // Twitch
     registerPlatform('twitch.tv', Twitch);
+    registerPlatform('www.twitch.tv', Twitch);
 
     // YouTube
     registerPlatform('youtube.com', YouTube);
