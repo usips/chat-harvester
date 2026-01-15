@@ -136,12 +136,34 @@ export class Facebook extends Seed {
     onWebSocketMessage(ws, event) {
         try {
             // Facebook uses MQTT over WebSocket - data is binary
-            if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+            if (event.data instanceof ArrayBuffer) {
+                // Convert ArrayBuffer to hex string for analysis
+                const bytes = new Uint8Array(event.data);
+                const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+                // Also try to extract any readable text
+                let text = '';
+                for (const byte of bytes) {
+                    if (byte >= 32 && byte < 127) {
+                        text += String.fromCharCode(byte);
+                    } else {
+                        text += '.';
+                    }
+                }
+
                 this.recordWebSocketUnhandled(
                     ws,
                     'in',
-                    '[Binary MQTT data]',
+                    JSON.stringify({ hex: hex.slice(0, 2000), text: text.slice(0, 1000), size: bytes.length }),
                     'mqtt_binary'
+                );
+            } else if (event.data instanceof Blob) {
+                // For Blob, just record the size
+                this.recordWebSocketUnhandled(
+                    ws,
+                    'in',
+                    JSON.stringify({ type: 'blob', size: event.data.size }),
+                    'mqtt_blob'
                 );
             } else {
                 // Text data - could be numeric-indexed JSON (Gateway protocol)
