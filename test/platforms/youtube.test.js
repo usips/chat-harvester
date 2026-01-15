@@ -555,4 +555,253 @@ describe('YouTube Platform', () => {
             expect(element.innerHTML).toContain('Hello from another platform!');
         });
     });
+
+    describe('Real recording data tests', () => {
+        let youtube;
+
+        beforeEach(() => {
+            youtube = Object.create(YouTube.prototype);
+            youtube.platform = 'YouTube';
+            youtube.channel = 'TestChannel';
+            youtube.namespace = YouTube.namespace;
+            youtube.log = vi.fn();
+            youtube.warn = vi.fn();
+        });
+
+        it('should parse all real recorded messages without errors', async () => {
+            const realMessages = youtubeEvents.realRecordingMessages;
+
+            for (const action of realMessages) {
+                const messages = await youtube.prepareChatMessages([action]);
+
+                expect(messages).toHaveLength(1);
+                expect(messages[0]).toBeInstanceOf(ChatMessage);
+                expect(messages[0].username).toBeTruthy();
+                expect(messages[0].id).toBeTruthy();
+            }
+        });
+
+        it('should correctly parse real text message', async () => {
+            // First message: "Tom is Bulgarian so it's expected"
+            const action = youtubeEvents.realRecordingMessages[0];
+            const messages = await youtube.prepareChatMessages([action]);
+
+            expect(messages[0].username).toBe('@Orpheus5stargeneral');
+            expect(messages[0].message).toBe("Tom is Bulgarian so it's expected ");
+        });
+
+        it('should correctly parse real message with member badge', async () => {
+            // Second message has "Member (1 month)" badge
+            const action = youtubeEvents.realRecordingMessages[1];
+            const messages = await youtube.prepareChatMessages([action]);
+
+            expect(messages[0].username).toBe('@farflight00');
+            expect(messages[0].is_sub).toBe(true);
+        });
+
+        it('should correctly parse real message with custom emojis', async () => {
+            // Third message has two custom emojis
+            const action = youtubeEvents.realRecordingMessages[2];
+            const messages = await youtube.prepareChatMessages([action]);
+
+            expect(messages[0].username).toBe('@Afrosamurai469');
+            expect(messages[0].emojis).toHaveLength(2);
+        });
+
+        it('should correctly parse real message with moderator badge', async () => {
+            // Fourth message has moderator badge
+            const action = youtubeEvents.realRecordingMessages[3];
+            const messages = await youtube.prepareChatMessages([action]);
+
+            expect(messages[0].username).toBe('@Stylonuum');
+            expect(messages[0].is_mod).toBe(true);
+        });
+
+        it('should correctly parse real SuperChat message', async () => {
+            const action = youtubeEvents.realPaidMessage;
+            const messages = await youtube.prepareChatMessages([action]);
+
+            expect(messages[0].username).toBe('@babushkaposting');
+            expect(messages[0].amount).toBe(10);
+            expect(messages[0].currency).toBe('USD');
+            expect(messages[0].message).toContain('guilty');
+        });
+    });
+
+    describe('Real data mutation fuzzing', () => {
+        let youtube;
+
+        beforeEach(() => {
+            youtube = Object.create(YouTube.prototype);
+            youtube.platform = 'YouTube';
+            youtube.channel = 'TestChannel';
+            youtube.namespace = YouTube.namespace;
+            youtube.log = vi.fn();
+            youtube.warn = vi.fn();
+        });
+
+        it('should handle mutations of real message runs', async () => {
+            const baseAction = youtubeEvents.realRecordingMessages[0];
+            const renderer = baseAction.item.liveChatTextMessageRenderer;
+
+            await fc.assert(
+                fc.asyncProperty(
+                    fc.array(
+                        fc.oneof(
+                            fc.record({ text: fc.string() }),
+                            fc.record({
+                                emoji: fc.record({
+                                    emojiId: fc.string(),
+                                    image: fc.record({
+                                        thumbnails: fc.array(fc.record({ url: fc.string() }))
+                                    })
+                                })
+                            })
+                        )
+                    ),
+                    async (runs) => {
+                        const mutatedAction = {
+                            item: {
+                                liveChatTextMessageRenderer: {
+                                    ...renderer,
+                                    message: { runs }
+                                }
+                            }
+                        };
+
+                        try {
+                            await youtube.prepareChatMessages([mutatedAction]);
+                            return true;
+                        } catch (e) {
+                            console.error('Crash on mutated runs:', JSON.stringify(runs));
+                            return false;
+                        }
+                    }
+                ),
+                { numRuns: 100 }
+            );
+        });
+
+        it('should handle mutations of real message author info', async () => {
+            const baseAction = youtubeEvents.realRecordingMessages[0];
+            const renderer = baseAction.item.liveChatTextMessageRenderer;
+
+            await fc.assert(
+                fc.asyncProperty(
+                    fc.record({
+                        authorName: fc.record({ simpleText: fc.string() }),
+                        authorPhoto: fc.record({
+                            thumbnails: fc.array(fc.record({
+                                url: fc.string(),
+                                width: fc.integer({ min: 1, max: 256 }),
+                                height: fc.integer({ min: 1, max: 256 })
+                            }), { minLength: 1 })
+                        }),
+                        authorExternalChannelId: fc.string()
+                    }),
+                    async (authorInfo) => {
+                        const mutatedAction = {
+                            item: {
+                                liveChatTextMessageRenderer: {
+                                    ...renderer,
+                                    ...authorInfo
+                                }
+                            }
+                        };
+
+                        try {
+                            await youtube.prepareChatMessages([mutatedAction]);
+                            return true;
+                        } catch (e) {
+                            console.error('Crash on mutated author:', JSON.stringify(authorInfo));
+                            return false;
+                        }
+                    }
+                ),
+                { numRuns: 100 }
+            );
+        });
+
+        it('should handle mutations of real message badges', async () => {
+            const baseAction = youtubeEvents.realRecordingMessages[3]; // Has moderator badge
+            const renderer = baseAction.item.liveChatTextMessageRenderer;
+
+            await fc.assert(
+                fc.asyncProperty(
+                    fc.array(
+                        fc.record({
+                            liveChatAuthorBadgeRenderer: fc.record({
+                                icon: fc.option(fc.record({ iconType: fc.string() }), { nil: undefined }),
+                                customThumbnail: fc.option(
+                                    fc.record({
+                                        thumbnails: fc.array(fc.record({ url: fc.string() }))
+                                    }),
+                                    { nil: undefined }
+                                ),
+                                tooltip: fc.option(fc.string(), { nil: undefined })
+                            })
+                        })
+                    ),
+                    async (badges) => {
+                        const mutatedAction = {
+                            item: {
+                                liveChatTextMessageRenderer: {
+                                    ...renderer,
+                                    authorBadges: badges
+                                }
+                            }
+                        };
+
+                        try {
+                            await youtube.prepareChatMessages([mutatedAction]);
+                            return true;
+                        } catch (e) {
+                            console.error('Crash on mutated badges:', JSON.stringify(badges));
+                            return false;
+                        }
+                    }
+                ),
+                { numRuns: 100 }
+            );
+        });
+
+        it('should handle mutations of real paid message amounts', async () => {
+            const baseAction = youtubeEvents.realPaidMessage;
+            const renderer = baseAction.item.liveChatPaidMessageRenderer;
+
+            const currencyFormats = [
+                '$', '€', '£', '¥', '₹', 'US$', 'A$', 'C$', 'HK$',
+                'R$', 'MX$', 'NZ$', 'S$', 'SEK', 'NOK', 'CHF', 'PLN'
+            ];
+
+            await fc.assert(
+                fc.asyncProperty(
+                    fc.record({
+                        currency: fc.constantFrom(...currencyFormats),
+                        amount: fc.float({ min: Math.fround(0.01), max: Math.fround(99999.99) })
+                    }),
+                    async ({ currency, amount }) => {
+                        const amountStr = currency + amount.toFixed(2);
+                        const mutatedAction = {
+                            item: {
+                                liveChatPaidMessageRenderer: {
+                                    ...renderer,
+                                    purchaseAmountText: { simpleText: amountStr }
+                                }
+                            }
+                        };
+
+                        try {
+                            await youtube.prepareChatMessages([mutatedAction]);
+                            return true;
+                        } catch (e) {
+                            console.error('Crash on mutated amount:', amountStr);
+                            return false;
+                        }
+                    }
+                ),
+                { numRuns: 100 }
+            );
+        });
+    });
 });

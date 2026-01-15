@@ -318,4 +318,167 @@ describe('Kick Platform', () => {
             );
         });
     });
+
+    describe('Real recording data tests', () => {
+        let kick;
+
+        beforeEach(() => {
+            kick = Object.create(Kick.prototype);
+            kick.platform = 'Kick';
+            kick.channel = 'testchannel';
+            kick.namespace = Kick.namespace;
+            kick.log = vi.fn();
+            kick.warn = vi.fn();
+        });
+
+        it('should parse all real recorded messages without errors', () => {
+            const realMessages = kickEvents.realRecordingMessages;
+
+            for (const event of realMessages) {
+                const data = JSON.parse(event.data);
+                const message = kick.prepareChatMessage(data);
+
+                expect(message).toBeInstanceOf(ChatMessage);
+                expect(message.username).toBeTruthy();
+                expect(message.id).toBeTruthy();
+            }
+        });
+
+        it('should correctly parse real message with emotes', () => {
+            // First real message contains [emote:4147814:OuttaPocket]
+            const event = kickEvents.realRecordingMessages[0];
+            const data = JSON.parse(event.data);
+            const message = kick.prepareChatMessage(data);
+
+            expect(message.username).toBe('CrispyLegs');
+            expect(message.emojis).toHaveLength(1);
+            expect(message.emojis[0][2]).toBe('OuttaPocket');
+        });
+
+        it('should correctly parse real message with moderator badge', () => {
+            // CrispyLegs has moderator badge
+            const event = kickEvents.realRecordingMessages[0];
+            const data = JSON.parse(event.data);
+            const message = kick.prepareChatMessage(data);
+
+            expect(message.is_mod).toBe(true);
+        });
+
+        it('should correctly parse real message with subscriber badge', () => {
+            // tuqos has subscriber badge with count 6
+            const event = kickEvents.realRecordingMessages[2];
+            const data = JSON.parse(event.data);
+            const message = kick.prepareChatMessage(data);
+
+            expect(message.is_sub).toBe(true);
+            expect(message.username).toBe('tuqos');
+        });
+
+        it('should correctly parse real KicksGifted event', () => {
+            const event = kickEvents.realKicksGifted;
+            const data = JSON.parse(event.data);
+            const message = kick.prepareKicksGiftedMessage(data);
+
+            expect(message).toBeInstanceOf(ChatMessage);
+            expect(message.username).toBe('BestSlime');
+            expect(message.amount).toBe(100);
+            expect(message.currency).toBe('KICKS');
+        });
+    });
+
+    describe('Real data mutation fuzzing', () => {
+        let kick;
+
+        beforeEach(() => {
+            kick = Object.create(Kick.prototype);
+            kick.platform = 'Kick';
+            kick.channel = 'testchannel';
+            kick.namespace = Kick.namespace;
+            kick.log = vi.fn();
+            kick.warn = vi.fn();
+        });
+
+        it('should handle mutations of real message content', () => {
+            const realEvent = kickEvents.realRecordingMessages[0];
+            const baseData = JSON.parse(realEvent.data);
+
+            fc.assert(
+                fc.property(fc.string(), (content) => {
+                    const mutatedData = { ...baseData, content };
+                    try {
+                        kick.prepareChatMessage(mutatedData);
+                        return true;
+                    } catch (e) {
+                        console.error('Crash on mutated content:', content);
+                        return false;
+                    }
+                }),
+                { numRuns: 100 }
+            );
+        });
+
+        it('should handle mutations of real message sender', () => {
+            const realEvent = kickEvents.realRecordingMessages[0];
+            const baseData = JSON.parse(realEvent.data);
+
+            fc.assert(
+                fc.property(
+                    fc.record({
+                        id: fc.integer(),
+                        username: fc.string(),
+                        slug: fc.string(),
+                        identity: fc.record({
+                            color: fc.string(),
+                            badges: fc.array(fc.record({
+                                type: fc.string(),
+                                text: fc.option(fc.string(), { nil: undefined }),
+                                count: fc.option(fc.integer(), { nil: undefined })
+                            }))
+                        })
+                    }),
+                    (sender) => {
+                        const mutatedData = { ...baseData, sender };
+                        try {
+                            kick.prepareChatMessage(mutatedData);
+                            return true;
+                        } catch (e) {
+                            console.error('Crash on mutated sender:', JSON.stringify(sender));
+                            return false;
+                        }
+                    }
+                ),
+                { numRuns: 100 }
+            );
+        });
+
+        it('should handle mutations of real KicksGifted gift field', () => {
+            const realEvent = kickEvents.realKicksGifted;
+            const baseData = JSON.parse(realEvent.data);
+
+            fc.assert(
+                fc.property(
+                    fc.record({
+                        gift_id: fc.string(),
+                        name: fc.string(),
+                        amount: fc.integer(),
+                        type: fc.constantFrom('BASIC', 'LEVEL_UP', 'PREMIUM'),
+                        tier: fc.constantFrom('BASIC', 'MID', 'HIGH'),
+                        character_limit: fc.integer(),
+                        pinned_time: fc.integer()
+                    }),
+                    (gift) => {
+                        const mutatedData = { ...baseData, gift };
+                        try {
+                            kick.prepareKicksGiftedMessage(mutatedData);
+                            return true;
+                        } catch (e) {
+                            console.error('Crash on mutated gift:', JSON.stringify(gift));
+                            return false;
+                        }
+                    }
+                ),
+                { numRuns: 100 }
+            );
+        });
+    });
 });

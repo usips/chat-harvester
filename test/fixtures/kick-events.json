@@ -58,5 +58,37 @@
   },
   "pong": {
     "type": "pong"
+  },
+  "realRecordingMessages": [
+    {
+      "event": "App\\Events\\ChatMessageEvent",
+      "data": "{\"id\":\"6aabe870-4aaa-4127-89fa-23e05ba6bdb4\",\"chatroom_id\":16756136,\"content\":\"[emote:4147814:OuttaPocket]\",\"type\":\"message\",\"created_at\":\"2026-01-15T13:53:31+00:00\",\"sender\":{\"id\":18668803,\"username\":\"CrispyLegs\",\"slug\":\"crispylegs\",\"identity\":{\"color\":\"#F2708A\",\"badges\":[{\"type\":\"moderator\",\"text\":\"Moderator\"},{\"type\":\"subscriber\",\"text\":\"Subscriber\",\"count\":6},{\"type\":\"sub_gifter\",\"text\":\"Sub Gifter\",\"count\":120}]}},\"metadata\":{\"message_ref\":\"1768485210852\"}}",
+      "channel": "chatrooms.16756136.v2"
+    },
+    {
+      "event": "App\\Events\\ChatMessageEvent",
+      "data": "{\"id\":\"81bfcdba-ee9c-4702-bb97-01e0b68a593d\",\"chatroom_id\":16756136,\"content\":\"[emote:37226:KEKW]\",\"type\":\"message\",\"created_at\":\"2026-01-15T13:53:39+00:00\",\"sender\":{\"id\":57491497,\"username\":\"TinfoilAlog\",\"slug\":\"tinfoilalog\",\"identity\":{\"color\":\"#BC66FF\",\"badges\":[]}},\"metadata\":{\"message_ref\":\"1768485219148\"}}",
+      "channel": "chatrooms.16756136.v2"
+    },
+    {
+      "event": "App\\Events\\ChatMessageEvent",
+      "data": "{\"id\":\"79241483-5fea-4b84-abd8-6fc01fb98fe2\",\"chatroom_id\":16756136,\"content\":\"back to the plantation\",\"type\":\"message\",\"created_at\":\"2026-01-15T13:53:57+00:00\",\"sender\":{\"id\":2001076,\"username\":\"tuqos\",\"slug\":\"tuqos\",\"identity\":{\"color\":\"#75FD46\",\"badges\":[{\"type\":\"subscriber\",\"text\":\"Subscriber\",\"count\":6}]}},\"metadata\":{\"message_ref\":\"1768485251708\"}}",
+      "channel": "chatrooms.16756136.v2"
+    },
+    {
+      "event": "App\\Events\\ChatMessageEvent",
+      "data": "{\"id\":\"b95e4574-7d2f-4905-a222-ef61083b0f2c\",\"chatroom_id\":16756136,\"content\":\"it would of been nice lol\",\"type\":\"message\",\"created_at\":\"2026-01-15T13:54:08+00:00\",\"sender\":{\"id\":194190,\"username\":\"ohmydawg\",\"slug\":\"ohmydawg\",\"identity\":{\"color\":\"#75FD46\",\"badges\":[{\"type\":\"founder\",\"text\":\"Founder\"},{\"type\":\"subscriber\",\"text\":\"Subscriber\",\"count\":10},{\"type\":\"sub_gifter\",\"text\":\"Sub Gifter\",\"count\":16}]}},\"metadata\":{\"message_ref\":\"1768485248590\"}}",
+      "channel": "chatrooms.16756136.v2"
+    },
+    {
+      "event": "App\\Events\\ChatMessageEvent",
+      "data": "{\"id\":\"01752b0b-b502-4d1f-97f7-3f20cc9c1734\",\"chatroom_id\":16756136,\"content\":\"what does destiny have to do with Chud?\",\"type\":\"message\",\"created_at\":\"2026-01-15T13:55:03+00:00\",\"sender\":{\"id\":79810266,\"username\":\"ChudQuietQuitting\",\"slug\":\"chudquietquitting\",\"identity\":{\"color\":\"#75FD46\",\"badges\":[{\"type\":\"subscriber\",\"text\":\"Subscriber\",\"count\":4},{\"type\":\"sub_gifter\",\"text\":\"Sub Gifter\",\"count\":5}]}},\"metadata\":{\"message_ref\":\"1768485303401\"}}",
+      "channel": "chatrooms.16756136.v2"
+    }
+  ],
+  "realKicksGifted": {
+    "event": "KicksGifted",
+    "data": "{\"gift_transaction_id\":\"f033ae95-86d9-4ce8-97c9-2a6969e973d0\",\"message\":\"\",\"sender\":{\"id\":73126093,\"username\":\"BestSlime\",\"username_color\":\"#BC66FF\",\"profile_picture\":\"https://kick.com/img/default-profile-pictures/default-avatar-6.webp\"},\"gift\":{\"gift_id\":\"full_send\",\"name\":\"Full Send\",\"amount\":100,\"type\":\"BASIC\",\"tier\":\"BASIC\",\"character_limit\":0,\"pinned_time\":0},\"created_at\":\"2026-01-15T14:04:20.6820255Z\"}",
+    "channel": "channel_16999603"
   }
 }

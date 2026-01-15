@@ -107,5 +107,119 @@
       "avatar": "https://example.com/external-avatar.jpg",
       "sent_at": 1768430840000
     }
+  },
+  "realRecordingMessages": [
+    {
+      "item": {
+        "liveChatTextMessageRenderer": {
+          "message": { "runs": [{ "text": "Tom is Bulgarian so it's expected " }] },
+          "authorName": { "simpleText": "@Orpheus5stargeneral" },
+          "authorPhoto": {
+            "thumbnails": [
+              { "url": "https://yt4.ggpht.com/nZ6XOKxhVq4Gj9RqnWLyz5mQ73KDxN4oHKAdVh8i5WANFJmJHjlLf9_b3x2O8_nlz3TTNj64-HM=s64-c-k-c0x00ffffff-no-rj", "width": 64, "height": 64 }
+            ]
+          },
+          "id": "ChwKGkNMMzAyT0xZalpJREZYc0oxZ0FkR2RrdVp3",
+          "timestampUsec": "1768485203362602",
+          "authorExternalChannelId": "UCJG0yZim-avjx4Z88npjdRA"
+        }
+      }
+    },
+    {
+      "item": {
+        "liveChatTextMessageRenderer": {
+          "message": { "runs": [{ "text": "very destiny coded" }] },
+          "authorName": { "simpleText": "@farflight00" },
+          "authorPhoto": {
+            "thumbnails": [
+              { "url": "https://yt4.ggpht.com/Qv1omlMf7nBMcUAvlo2JbFpjArtK-6rYkFBkgpGeZz8IoOvu_-w07IADiNzEZsuWXTpuerIm=s64-c-k-c0x00ffffff-no-rj", "width": 64, "height": 64 }
+            ]
+          },
+          "id": "ChwKGkNOX0UwT1RZalpJREZjZVI1UWNkNkFjU2VR",
+          "timestampUsec": "1768485207419847",
+          "authorBadges": [
+            {
+              "liveChatAuthorBadgeRenderer": {
+                "customThumbnail": {
+                  "thumbnails": [{ "url": "https://yt3.ggpht.com/A4R5j7sscJWTU0NwxoUSBQm4hcVfH7De8jrukuQ_05ITM-lNx5ENqR8zm7LFQXjkmiKj7pF85iBIfklyOg=s32-c-k", "width": 32, "height": 32 }]
+                },
+                "tooltip": "Member (1 month)"
+              }
+            }
+          ],
+          "authorExternalChannelId": "UCQkyDP08FCKbyP3pPvMTv9g"
+        }
+      }
+    },
+    {
+      "item": {
+        "liveChatTextMessageRenderer": {
+          "message": {
+            "runs": [
+              { "emoji": { "emojiId": "UCkszU2WH9gy1mb0dV-11UJg/xsIfY4OqCd2T29sP54iAsAw", "image": { "thumbnails": [{ "url": "https://yt3.ggpht.com/G061SAfXg2bmG1ZXbJsJzQJpN8qEf_W3f5cb5nwzBYIV58IpPf6H90lElDl85iti3HgoL3o=w48-h48-c-k-nd" }] }, "isCustomEmoji": true } },
+              { "emoji": { "emojiId": "UCkszU2WH9gy1mb0dV-11UJg/xsIfY4OqCd2T29sP54iAsAw", "image": { "thumbnails": [{ "url": "https://yt3.ggpht.com/G061SAfXg2bmG1ZXbJsJzQJpN8qEf_W3f5cb5nwzBYIV58IpPf6H90lElDl85iti3HgoL3o=w48-h48-c-k-nd" }] }, "isCustomEmoji": true } }
+            ]
+          },
+          "authorName": { "simpleText": "@Afrosamurai469" },
+          "authorPhoto": {
+            "thumbnails": [
+              { "url": "https://yt4.ggpht.com/MNzIqgng7v0MNbv-TtJIreTBVP6683DVGU_V-juAGRcUHdQKEiaLZopREUAaGXDQsDcf7hcujd0=s64-c-k-c0x00ffffff-no-rj", "width": 64, "height": 64 }
+            ]
+          },
+          "id": "ChwKGkNNdlR2T25ZalpJREZhX0p3Z1FkaC0wV1Nn",
+          "timestampUsec": "1768485217579091",
+          "authorBadges": [
+            {
+              "liveChatAuthorBadgeRenderer": {
+                "customThumbnail": { "thumbnails": [{ "url": "https://yt3.ggpht.com/6YYy6158MQ8Y1a05XVlQUhrXpQRz8T-T2hCOnKhnn_6ysM3JjufMVBnO6oi5rwj-HFPl8A7jqpe2d4uhaQ=s32-c-k" }] },
+                "tooltip": "Member (2 months)"
+              }
+            }
+          ],
+          "authorExternalChannelId": "UC-BJWJFc5R7n5I77Vv34IiA"
+        }
+      }
+    },
+    {
+      "item": {
+        "liveChatTextMessageRenderer": {
+          "message": { "runs": [{ "text": "hahaha" }] },
+          "authorName": { "simpleText": "@Stylonuum" },
+          "authorPhoto": {
+            "thumbnails": [
+              { "url": "https://yt4.ggpht.com/ytc/AIdro_lJk1J-guaLr8ST6FN3OqQ47Za4n6tyg7eqf9ABOJ_HhA=s64-c-k-c0x00ffffff-no-rj", "width": 64, "height": 64 }
+            ]
+          },
+          "id": "ChwKGkNLVFByX1RZalpJREZaN2NsQWtkalhFMzZ3",
+          "timestampUsec": "1768485240435467",
+          "authorBadges": [
+            {
+              "liveChatAuthorBadgeRenderer": {
+                "icon": { "iconType": "MODERATOR" },
+                "tooltip": "Moderator"
+              }
+            }
+          ],
+          "authorExternalChannelId": "UCCBS6xkXynGLa46Fux_8BIg"
+        }
+      }
+    }
+  ],
+  "realPaidMessage": {
+    "item": {
+      "liveChatPaidMessageRenderer": {
+        "message": { "runs": [{ "text": "guilty he's guilty he's got crimes against women phrenology" }] },
+        "authorName": { "simpleText": "@babushkaposting" },
+        "authorPhoto": {
+          "thumbnails": [
+            { "url": "https://yt4.ggpht.com/ytc/AIdro_kQwfQq_KD8xYZlLxlz_Mv3O3qzWj2b3C4e5VHo3V1KJpQ=s64-c-k-c0x00ffffff-no-rj", "width": 64, "height": 64 }
+          ]
+        },
+        "purchaseAmountText": { "simpleText": "$10.00" },
+        "id": "real-superchat-id",
+        "timestampUsec": "1768485500000000",
+        "authorExternalChannelId": "UCRealSuperChatter"
+      }
+    }
   }
 }
