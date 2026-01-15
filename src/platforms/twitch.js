@@ -258,7 +258,7 @@ export class Twitch extends Seed {
             case 'PRIVMSG': {
                 const message = this.prepareChatMessage(parsed);
                 if (message) {
-                    this.postChatMessage(message);
+                    this.sendChatMessages([message]);
                     this.recordWebSocketHandled(ws, 'in', line, 'PRIVMSG');
                 } else {
                     this.recordWebSocketIgnored(ws, 'in', line, 'PRIVMSG', 'Failed to parse');
