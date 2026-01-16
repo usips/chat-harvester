@@ -357,8 +357,13 @@ export class YouTube extends Seed {
     }
 
     async onFetchResponse(response) {
+        if (response.url.includes('/updated_metadata')) {
+            this._handleUpdatedMetadata(response);
+            return;
+        }
+
         if (!response.url.includes('/get_live_chat')) {
-            this.recordFetchIgnored(response.url, 'GET', response.status, 'Not live chat endpoint');
+            this.recordFetchIgnored(response.url, 'GET', response.status, 'Not monitored endpoint');
             return;
         }
 
@@ -404,6 +409,55 @@ export class YouTube extends Seed {
             this.recorder.record('fetch_response', {
                 url: response.url,
                 method: 'GET',
+                statusCode: response.status,
+                payload: error.message
+            }, EventStatus.ERROR, null, error.message);
+        }
+    }
+
+    /**
+     * Handle /updated_metadata endpoint responses for live viewer counts
+     * @param {Response} response
+     */
+    async _handleUpdatedMetadata(response) {
+        try {
+            const json = await response.json();
+            const actions = json?.actions;
+
+            if (!actions) {
+                this.recordFetchIgnored(response.url, 'POST', response.status, 'No actions in updated_metadata');
+                return;
+            }
+
+            let viewerCount = null;
+            for (const action of actions) {
+                if (action.updateViewershipAction) {
+                    const viewCountText = action.updateViewershipAction
+                        ?.viewCount?.videoViewCountRenderer?.viewCount?.simpleText;
+
+                    if (viewCountText) {
+                        // Parse "31,946 watching now" -> 31946
+                        const numericOnly = viewCountText.replace(/[^\d]/g, '');
+                        if (numericOnly) {
+                            viewerCount = parseInt(numericOnly, 10);
+                            if (!isNaN(viewerCount)) {
+                                this.sendViewerCount(viewerCount);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            this.recordFetchHandled(response.url, 'POST', response.status, json, {
+                actionCount: actions.length,
+                viewerCount: viewerCount
+            });
+        } catch (error) {
+            this.warn('Failed to process updated_metadata response:', error);
+            this.recorder.record('fetch_response', {
+                url: response.url,
+                method: 'POST',
                 statusCode: response.status,
                 payload: error.message
             }, EventStatus.ERROR, null, error.message);
