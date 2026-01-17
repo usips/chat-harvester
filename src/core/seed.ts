@@ -481,7 +481,7 @@ export class Seed {
         Object.defineProperty(newWebSocket, 'CLOSING', { value: 2 });
         Object.defineProperty(newWebSocket, 'CLOSED', { value: 3 });
         Object.defineProperty(newWebSocket, 'prototype', { value: oldWebSocket.prototype });
-        WINDOW.WebSocket = Object.assign(newWebSocket, oldWebSocket);
+        WINDOW.WebSocket = newWebSocket;
         return WINDOW.WebSocket;
     }
 
