@@ -13,7 +13,8 @@
     "build:extension": "npm run build:extension:chrome && npm run build:extension:firefox",
     "build:extension:chrome": "webpack --config webpack.extension.js --env target=chrome",
     "build:extension:firefox": "webpack --config webpack.extension.js --env target=firefox",
-    "watch:userscript": "webpack --config webpack.userscript.js --watch"
+    "watch:userscript": "webpack --config webpack.userscript.js --watch",
+    "typecheck": "tsc --noEmit"
   },
   "repository": {
     "type": "git",
@@ -41,6 +42,8 @@
     "copy-webpack-plugin": "^12.0.0",
     "fast-check": "^4.5.3",
     "jsdom": "^27.4.0",
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.17",
     "webpack": "^5.101.3",
     "webpack-cli": "^6.0.1"

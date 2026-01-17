@@ -11,30 +11,99 @@
  * - Capture KicksGifted (premium gifts)
  */
 
-import { Seed, ChatMessage, uuidv5, EventStatus } from '../core/index.js';
+import { Seed, ChatMessage, PatchedWebSocket } from '../core/index.js';
+
+interface KickBadge {
+    type: string;
+}
+
+interface KickSender {
+    id?: string;
+    username?: string;
+    profile_picture?: string;
+    identity?: {
+        badges?: KickBadge[];
+    };
+}
+
+interface KickGift {
+    amount?: number;
+    name?: string;
+}
+
+interface KickChatMessage {
+    id: string;
+    content?: string;
+    created_at?: string;
+    sender?: KickSender;
+    gift?: KickGift;
+}
+
+interface KickDeletedMessage {
+    message: {
+        id: string;
+    };
+    aiModerated?: boolean;
+    violatedRules?: string[];
+}
+
+interface KickGiftedSubs {
+    username: string;
+    gifter_username: string;
+    gifted_usernames: string[];
+}
+
+interface KickSubscription {
+    username: string;
+    months: number;
+}
+
+interface KickWebSocketEvent {
+    event?: string;
+    type?: string;
+    data?: string | { viewers?: string };
+}
+
+interface KickChannelInfo {
+    id: number;
+    livestream?: {
+        id?: number;
+    };
+}
+
+interface KickMessagesResponse {
+    data: {
+        messages: KickChatMessage[];
+    };
+}
+
+interface KickViewersResponse {
+    livestream_id: number;
+    viewers: number;
+}
 
 export class Kick extends Seed {
     static hostname = 'kick.com';
     static namespace = '6efe7271-da75-4c2f-93fc-ddf37d02b8a9';
 
-    channel_id = null;
-    livestream_id = null;
+    channel_id: number | null = null;
+    livestream_id: number | null = null;
 
     constructor() {
-        const channel = window.location.href.split('/').filter(x => x)[2]?.toLowerCase();
-        super(Kick.namespace, 'Kick', channel);
+        const channel = window.location.href.split('/').filter(x => x)[2]?.toLowerCase() ?? null;
+        super(Kick.namespace, 'Kick', channel!);
         this.fetchChatHistory();
     }
 
-    async fetchChatHistory() {
-        const channel_info = await fetch(`https://kick.com/api/v2/channels/${this.channel}`).then(response => response.json());
+    async fetchChatHistory(): Promise<void> {
+        const channel_info = await fetch(`https://kick.com/api/v2/channels/${this.channel}`).then(response => response.json()) as KickChannelInfo;
         this.channel_id = channel_info.id;
-        this.livestream_id = channel_info.livestream?.id;
+        this.livestream_id = channel_info.livestream?.id ?? null;
 
         fetch(`https://kick.com/api/v2/channels/${this.channel_id}/messages`)
             .then(response => response.json())
-            .then(json => {
-                this.log(json);
+            .then((json: KickMessagesResponse) => {
+                this.log('Fetched chat history', json);
                 json.data.messages.reverse().forEach((messageJson) => {
                     const message = this.prepareChatMessage(messageJson);
                     this.sendChatMessages([message]);
@@ -42,19 +111,19 @@ export class Kick extends Seed {
             });
     }
 
-    receiveChatMessage(json) {
+    receiveChatMessage(json: KickChatMessage): void {
         const message = this.prepareChatMessage(json);
         this.sendChatMessages([message]);
     }
 
-    prepareChatMessage(json) {
-        const message = new ChatMessage(json.id, this.platform, this.channel);
+    prepareChatMessage(json: KickChatMessage): ChatMessage {
+        const message = new ChatMessage(json.id, this.platform!, this.channel!);
         message.sent_at = json.created_at ? Date.parse(json.created_at) : Date.now();
         message.username = json.sender?.username ?? 'Unknown';
         message.message = json.content ?? '';
 
         if ((json.gift?.amount ?? 0) > 0) {
-            message.amount = json.gift.amount / 100;
+            message.amount = json.gift!.amount! / 100;
             message.currency = 'USD';
         }
 
@@ -101,10 +170,10 @@ export class Kick extends Seed {
      * - BASIC tier: No created_at, no gift_transaction_id
      * - LEVEL_UP tier: Has created_at, expires_at, gift_transaction_id, profile_picture
      */
-    prepareKicksGiftedMessage(json) {
+    prepareKicksGiftedMessage(json: KickChatMessage & { gift_transaction_id?: string; message?: string }): ChatMessage {
         // Use gift_transaction_id if available, otherwise generate from sender + timestamp
         const messageId = json.gift_transaction_id ?? `kicks_${json.sender?.id ?? 'unknown'}_${Date.now()}`;
-        const message = new ChatMessage(messageId, this.platform, this.channel);
+        const message = new ChatMessage(messageId, this.platform!, this.channel!);
 
         // Use created_at if available (newer LEVEL_UP format), otherwise use current time
         message.sent_at = json.created_at ? Date.parse(json.created_at) : Date.now();
@@ -125,8 +194,8 @@ export class Kick extends Seed {
         return message;
     }
 
-    onWebSocketMessage(ws, event) {
-        const json = JSON.parse(event.data);
+    onWebSocketMessage(ws: PatchedWebSocket, event: MessageEvent): void {
+        const json = JSON.parse(event.data as string) as KickWebSocketEvent;
         if (json.event === undefined) {
             switch (json.type) {
                 case 'ping':
@@ -135,28 +204,30 @@ export class Kick extends Seed {
                     return;
                 default:
                     this.log('WebSocket received data with no event.', event);
-                    this.recordWebSocketUnhandled(ws, 'in', event.data, json.type);
+                    this.recordWebSocketUnhandled(ws, 'in', event.data, json.type ?? 'unknown');
             }
         }
 
         const subValue = 5;
 
         switch (json.event) {
-            case 'App\\Events\\ChatMessageEvent':
-                const chatData = JSON.parse(json.data);
+            case 'App\\Events\\ChatMessageEvent': {
+                const chatData = JSON.parse(json.data as string) as KickChatMessage;
                 this.receiveChatMessage(chatData);
                 this.recordWebSocketHandled(ws, 'in', event.data, chatData, json.event);
                 break;
+            }
 
-            case 'KicksGifted':
-                const kicksData = JSON.parse(json.data);
+            case 'KicksGifted': {
+                const kicksData = JSON.parse(json.data as string) as KickChatMessage & { gift_transaction_id?: string; message?: string };
                 const kicksMessage = this.prepareKicksGiftedMessage(kicksData);
                 this.sendChatMessages([kicksMessage]);
                 this.recordWebSocketHandled(ws, 'in', event.data, kicksData, json.event);
                 break;
+            }
 
-            case 'App\\Events\\GiftedSubscriptionsEvent':
-                const giftData = JSON.parse(json.data);
+            case 'App\\Events\\GiftedSubscriptionsEvent': {
+                const giftData = JSON.parse(json.data as string) as KickGiftedSubs;
                 this.receiveSubscriptions({
                     id: `${Date.now()}_${giftData.username}`,
                     gifted: true,
@@ -166,9 +237,10 @@ export class Kick extends Seed {
                 });
                 this.recordWebSocketHandled(ws, 'in', event.data, giftData, json.event);
                 break;
+            }
 
-            case 'App\\Events\\SubscriptionEvent':
-                const subData = JSON.parse(json.data);
+            case 'App\\Events\\SubscriptionEvent': {
+                const subData = JSON.parse(json.data as string) as KickSubscription;
                 this.receiveSubscriptions({
                     id: `${Date.now()}_${subData.username}`,
                     gifted: false,
@@ -178,9 +250,10 @@ export class Kick extends Seed {
                 });
                 this.recordWebSocketHandled(ws, 'in', event.data, subData, json.event);
                 break;
+            }
 
-            case 'App\\Events\\MessageDeletedEvent':
-                const delData = JSON.parse(json.data);
+            case 'App\\Events\\MessageDeletedEvent': {
+                const delData = JSON.parse(json.data as string) as KickDeletedMessage;
                 if (delData.aiModerated) {
                     this.log('AI Moderated message ID:', delData.message.id, 'Rules:', delData.violatedRules);
                     this.recordWebSocketIgnored(ws, 'in', event.data, json.event, 'AI moderated - not user deletion');
@@ -190,15 +263,17 @@ export class Kick extends Seed {
                     this.recordWebSocketHandled(ws, 'in', event.data, delData, json.event);
                 }
                 break;
+            }
 
             case 'App\\Events\\LivestreamUpdated':
-            case 'App\\Events\\UpdatedLiveStreamEvent':
-                let viewers = parseInt(json.data.viewers, 10);
+            case 'App\\Events\\UpdatedLiveStreamEvent': {
+                const viewers = parseInt((json.data as { viewers?: string })?.viewers ?? '', 10);
                 if (!isNaN(viewers)) {
                     this.sendViewerCount(viewers);
                     this.recordWebSocketHandled(ws, 'in', event.data, { viewers }, json.event);
                 }
                 break;
+            }
 
             // Ignored events - recorded but intentionally not processed
             case 'KicksLeaderboardUpdated':
@@ -221,13 +296,13 @@ export class Kick extends Seed {
 
             default:
                 this.log('WebSocket received data with unknown event.', json.event);
-                this.recordWebSocketUnhandled(ws, 'in', event.data, json.event);
+                this.recordWebSocketUnhandled(ws, 'in', event.data, json.event ?? 'unknown');
                 break;
         }
     }
 
-    onWebSocketSend(ws, data) {
-        const json = JSON.parse(data);
+    onWebSocketSend(ws: PatchedWebSocket, data: unknown): void {
+        const json = JSON.parse(data as string) as KickWebSocketEvent;
         if (json.event === undefined) {
             switch (json.type) {
                 case 'user_event':
@@ -239,7 +314,7 @@ export class Kick extends Seed {
                     return;
                 default:
                     this.log('WebSocket sent data with no event.', json);
-                    this.recordWebSocketUnhandled(ws, 'out', data, json.type);
+                    this.recordWebSocketUnhandled(ws, 'out', data, json.type ?? 'unknown');
             }
         }
 
@@ -250,15 +325,15 @@ export class Kick extends Seed {
                 break;
             default:
                 this.log('WebSocket sent data with unknown event.', data);
-                this.recordWebSocketUnhandled(ws, 'out', data, json.event);
+                this.recordWebSocketUnhandled(ws, 'out', data, json.event ?? 'unknown');
                 break;
         }
     }
 
-    async onFetchResponse(response) {
+    async onFetchResponse(response: Response): Promise<void> {
         if (response.url.indexOf('/current-viewers') >= 0) {
             const cloned = response.clone();
-            await cloned.json().then((json) => {
+            await cloned.json().then((json: KickViewersResponse[]) => {
                 for (const channel of json) {
                     this.sendViewerCount(channel.viewers);
                 }
@@ -269,7 +344,7 @@ export class Kick extends Seed {
         }
     }
 
-    onXhrOpen(xhr, method, url, async, user, password) {
+    onXhrOpen(xhr: XMLHttpRequest, _method: string, url: string, _async?: boolean, _user?: string, _password?: string): void {
         if (url.startsWith('https://kick.com/api/v2/messages/send/')) {
             xhr.addEventListener('readystatechange', (event) => this.onXhrSendMessageReadyStateChange(xhr, event));
         } else if (url.startsWith('https://kick.com/api/v1/channels/')) {
@@ -281,29 +356,29 @@ export class Kick extends Seed {
         }
     }
 
-    onXhrChannelReadyStateChange(xhr, event) {
+    onXhrChannelReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
         if (xhr.readyState !== XMLHttpRequest.DONE) return;
 
-        const json = JSON.parse(xhr.responseText);
-        const viewers = parseInt(json.livestream?.viewers, 10);
-        if (!isNaN(viewers)) {
+        const json = JSON.parse(xhr.responseText) as { livestream?: { viewers?: number } };
+        const viewers = json.livestream?.viewers;
+        if (viewers !== undefined && !isNaN(viewers)) {
             this.sendViewerCount(viewers);
         }
     }
 
-    onXhrLivestreamReadyStateChange(xhr, event) {
+    onXhrLivestreamReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
         if (xhr.readyState !== XMLHttpRequest.DONE) return;
 
-        const json = JSON.parse(xhr.responseText);
+        const json = JSON.parse(xhr.responseText) as { data?: { id?: number } };
         if (json.data?.id !== undefined) {
             this.livestream_id = json.data.id;
         }
     }
 
-    onXhrSendMessageReadyStateChange(xhr, event) {
+    onXhrSendMessageReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
         if (xhr.readyState !== XMLHttpRequest.DONE) return;
 
-        const json = JSON.parse(xhr.responseText);
+        const json = JSON.parse(xhr.responseText) as { status?: { code?: number }; data?: KickChatMessage };
         if (json.status === undefined || json.data === undefined) {
             this.log('XHR sent message with no status or data.', json);
             return;
@@ -315,14 +390,14 @@ export class Kick extends Seed {
         }
     }
 
-    onXhrViewersReadyStateChange(xhr, event) {
+    onXhrViewersReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
         if (xhr.readyState !== XMLHttpRequest.DONE) return;
         if (this.channel_id === null) {
             this.warn('XHR received viewers with no channel ID.');
             return;
         }
 
-        const json = JSON.parse(xhr.responseText);
+        const json = JSON.parse(xhr.responseText) as KickViewersResponse[];
         for (const channel of json) {
             if (channel.livestream_id === this.livestream_id) {
                 this.sendViewerCount(channel.viewers);

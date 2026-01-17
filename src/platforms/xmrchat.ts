@@ -9,11 +9,22 @@
 
 import { Seed, ChatMessage, uuidv5, EventStatus } from '../core/index.js';
 
+interface XMRTip {
+    id: string;
+    name: string;
+    message: string;
+    createdAt: string;
+    private?: boolean;
+    payment: {
+        amount: string;
+    };
+}
+
 export class XMRChat extends Seed {
     static hostname = 'xmrchat.com';
     static namespace = '806b15e6-d8fe-4344-b66d-9604b5d60241';
 
-    messagesRead = [];
+    messagesRead: string[] = [];
     xmrPrice = 200;
 
     constructor() {
@@ -33,11 +44,11 @@ export class XMRChat extends Seed {
         super(XMRChat.namespace, 'XMRChat', channel);
     }
 
-    prepareChatMessage(tip) {
+    prepareChatMessage(tip: XMRTip): ChatMessage {
         const message = new ChatMessage(
-            uuidv5(`XMRCHAT-${tip.id}`, this.namespace),
-            this.platform,
-            this.channel
+            uuidv5(`XMRCHAT-${tip.id}`, this.namespace!),
+            this.platform!,
+            this.channel!
         );
         message.username = tip.name;
         message.message = tip.message;
@@ -48,10 +59,10 @@ export class XMRChat extends Seed {
         return message;
     }
 
-    onXhrReadyStateChange(xhr, event) {
+    onXhrReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
         if (xhr.readyState === XMLHttpRequest.DONE) {
             if (xhr.responseURL.indexOf('/tips/page/') > 0) {
-                const json = JSON.parse(xhr.response);
+                const json = JSON.parse(xhr.response as string) as XMRTip[];
                 let processedCount = 0;
                 let skippedOld = 0;
                 let skippedPrivate = 0;

@@ -14,7 +14,49 @@
  * - Reactions use FEEDBACK_ADD_STREAMING_REACTION_SUBSCRIBE subscription
  */
 
-import { Seed, ChatMessage, uuidv5, EventStatus } from '../core/index.js';
+import { Seed, ChatMessage, uuidv5, EventStatus, PatchedWebSocket } from '../core/index.js';
+
+interface FBBadge {
+    identity_badge_type: string;
+    is_earned?: boolean;
+    is_enabled?: boolean;
+}
+
+interface FBAuthor {
+    name?: string;
+    profile_picture_depth_0?: {
+        uri?: string;
+    };
+    profile_picture_depth_1?: {
+        uri?: string;
+    };
+    is_verified?: boolean;
+}
+
+interface FBComment {
+    id: string;
+    preferred_body?: {
+        text?: string;
+    };
+    body?: {
+        text?: string;
+    };
+    author?: FBAuthor;
+    created_time?: number;
+    discoverable_identity_badges_web?: FBBadge[];
+    identity_badges_web?: FBBadge[];
+}
+
+interface FBGraphQLResponse {
+    data?: {
+        comment_create?: {
+            comment?: FBComment;
+        };
+        live_video_comment_create_subscribe?: {
+            comment?: FBComment;
+        };
+    };
+}
 
 export class Facebook extends Seed {
     static hostname = 'facebook.com';
@@ -34,26 +76,26 @@ export class Facebook extends Seed {
         // Try to get from query param
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('v')) {
-            channel = urlParams.get('v');
+            channel = urlParams.get('v')!;
         }
 
         super(Facebook.namespace, 'Facebook', channel);
     }
 
-    onDocumentReady() {
+    onDocumentReady(): void {
         this.log('Facebook platform initialized');
     }
 
     /**
      * Parse a comment from GraphQL comment_create response
      */
-    parseComment(commentData) {
+    parseComment(commentData: FBComment): ChatMessage | null {
         if (!commentData || !commentData.id) return null;
 
         const message = new ChatMessage(
-            uuidv5(commentData.id, this.namespace),
-            this.platform,
-            this.channel
+            uuidv5(commentData.id, this.namespace!),
+            this.platform!,
+            this.channel!
         );
 
         // Message content
@@ -65,7 +107,7 @@ export class Facebook extends Seed {
         if (author) {
             message.username = author.name || 'Unknown';
             message.avatar = author.profile_picture_depth_0?.uri ||
-                           author.profile_picture_depth_1?.uri;
+                           author.profile_picture_depth_1?.uri || message.avatar;
             message.is_verified = author.is_verified || false;
         }
 
@@ -117,7 +159,7 @@ export class Facebook extends Seed {
     /**
      * Handle GraphQL response containing comment data
      */
-    handleGraphQLResponse(json) {
+    handleGraphQLResponse(json: FBGraphQLResponse): boolean {
         if (!json || !json.data) return false;
 
         // Handle comment_create (sent message confirmation)
@@ -133,7 +175,7 @@ export class Facebook extends Seed {
         return false;
     }
 
-    onWebSocketMessage(ws, event) {
+    onWebSocketMessage(ws: PatchedWebSocket, event: MessageEvent): void {
         try {
             // Facebook uses MQTT over WebSocket - data is binary
             if (event.data instanceof ArrayBuffer) {
@@ -158,7 +200,7 @@ export class Facebook extends Seed {
                     if (jsonStart >= 0) {
                         const jsonStr = text.slice(jsonStart);
                         try {
-                            const data = JSON.parse(jsonStr);
+                            const data = JSON.parse(jsonStr) as FBGraphQLResponse;
                             const comment = data?.data?.live_video_comment_create_subscribe?.comment;
                             if (comment) {
                                 const msg = this.parseComment(comment);
@@ -189,7 +231,7 @@ export class Facebook extends Seed {
             } else {
                 // Text data - could be numeric-indexed JSON (Gateway protocol)
                 try {
-                    const json = JSON.parse(event.data);
+                    const json = JSON.parse(event.data as string) as Record<string, number>;
 
                     // Check if it's the Gateway numeric-indexed format
                     if (typeof json['0'] === 'number' && Object.keys(json).length > 10) {
@@ -221,15 +263,7 @@ export class Facebook extends Seed {
         }
     }
 
-    onWebSocketOpen(ws) {
-        this.log('WebSocket opened:', ws.url);
-    }
-
-    onWebSocketClose(ws, event) {
-        this.log('WebSocket closed:', ws.url, 'code:', event.code);
-    }
-
-    async onFetchResponse(response) {
+    async onFetchResponse(response: Response): Promise<void> {
         try {
             const url = new URL(response.url);
 
@@ -237,10 +271,10 @@ export class Facebook extends Seed {
             if (url.pathname.includes('/api/graphql') || url.pathname.includes('/graphql')) {
                 const cloned = response.clone();
                 let handled = false;
-                let json = null;
+                let json: FBGraphQLResponse | null = null;
 
                 try {
-                    json = await cloned.json();
+                    json = await cloned.json() as FBGraphQLResponse;
                     if (json) {
                         handled = this.handleGraphQLResponse(json);
                     }
@@ -276,7 +310,7 @@ export class Facebook extends Seed {
         }
     }
 
-    onXhrReadyStateChange(xhr, event) {
+    onXhrReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
         if (xhr.readyState !== XMLHttpRequest.DONE) return;
 
         try {
@@ -285,20 +319,20 @@ export class Facebook extends Seed {
             // Capture GraphQL XHR
             if (url.pathname.includes('/api/graphql') || url.pathname.includes('/graphql')) {
                 let handled = false;
-                let json = null;
+                let json: FBGraphQLResponse | null = null;
 
                 try {
                     // Parse response - could be string or object depending on responseType
                     if (typeof xhr.response === 'string') {
-                        json = JSON.parse(xhr.response);
+                        json = JSON.parse(xhr.response) as FBGraphQLResponse;
                     } else if (typeof xhr.response === 'object') {
-                        json = xhr.response;
+                        json = xhr.response as FBGraphQLResponse;
                     }
 
                     if (json) {
                         handled = this.handleGraphQLResponse(json);
                     }
-                } catch (e) {
+                } catch {
                     // JSON parse error
                 }
 
@@ -324,12 +358,12 @@ export class Facebook extends Seed {
                 null,
                 'Not monitored'
             );
-        } catch (e) {
+        } catch {
             // Invalid URL or other error
         }
     }
 
-    onEventSourceMessage(es, event) {
+    onEventSourceMessage(es: EventSource, event: MessageEvent): void {
         this.recorder.recordEventSource(
             es.url,
             event.data,

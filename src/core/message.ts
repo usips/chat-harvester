@@ -3,11 +3,20 @@
  * Message data structures
  */
 
+/** Emoji tuple: [find pattern, replace URL, alt text] */
+export type EmojiTuple = [string, string, string];
+
 /**
  * Represents an update to be sent to the backend server
  */
 export class LivestreamUpdate {
-    constructor(platform, channel) {
+    platform: string;
+    channel: string;
+    messages?: ChatMessage[];
+    removals?: string[];
+    viewers?: number;
+
+    constructor(platform: string, channel: string) {
         this.platform = platform;
         this.channel = channel;
         this.messages = undefined;
@@ -20,7 +29,29 @@ export class LivestreamUpdate {
  * Represents a chat message from any platform
  */
 export class ChatMessage {
-    constructor(id, platform, channel) {
+    id: string;
+    platform: string;
+    channel: string;
+    sent_at: number;
+    received_at: number;
+    is_placeholder: boolean;
+
+    message: string;
+    emojis: EmojiTuple[];
+
+    username: string;
+    avatar: string;
+
+    amount: number;
+    currency: string;
+
+    is_verified: boolean;
+    is_sub: boolean;
+    is_mod: boolean;
+    is_owner: boolean;
+    is_staff: boolean;
+
+    constructor(id: string, platform: string, channel: string) {
         this.id = id;
         this.platform = platform;
         this.channel = channel;

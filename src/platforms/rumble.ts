@@ -13,24 +13,71 @@
 
 import { Seed, ChatMessage, uuidv5, EventStatus } from '../core/index.js';
 
+interface RumbleUser {
+    id: string;
+    username: string;
+    'image.1'?: string;
+    badges?: string[];
+}
+
+interface RumbleMessage {
+    id: string;
+    user_id: string;
+    text: string;
+    time: string;
+    rant?: {
+        price_cents: number;
+    };
+    notification?: unknown;
+    gift_purchase_notification?: {
+        total_gifts?: number;
+    };
+}
+
+interface RumbleEmote {
+    name: string;
+    file: string;
+}
+
+interface RumbleChannel {
+    emotes?: RumbleEmote[];
+}
+
+interface RumbleEventSourceData {
+    type: string;
+    data: {
+        messages: RumbleMessage[];
+        users: RumbleUser[];
+    };
+}
+
+interface RumbleSubscription {
+    id: string;
+    gifted: boolean;
+    buyer: string;
+    count: number;
+    value: number;
+}
+
 export class Rumble extends Seed {
     static hostname = 'rumble.com';
     static namespace = '5ceefcfb-4aa5-443a-bea6-1f8590231471';
 
-    emotes = [];
+    emotes: Record<string, string> = {};
 
     constructor() {
         const channel = null; // Cannot be determined before DOM is ready
-        super(Rumble.namespace, 'Rumble', channel);
+        super(Rumble.namespace, 'Rumble', channel!);
     }
 
-    onDocumentReady() {
+    onDocumentReady(): void {
         // Pop-out chat contains the channel ID in the URL
         if (window.location.href.indexOf('/chat/popup/') >= 0) {
-            this.channel = parseInt(window.location.href.split('/').filter(x => x)[4], 10);
+            this.channel = String(parseInt(window.location.href.split('/').filter(x => x)[4], 10));
         } else {
             // Otherwise, find the channel ID in the DOM (upvote button)
-            this.channel = parseInt(document.querySelector('.rumbles-vote-pill')?.dataset.id, 10);
+            const pill = document.querySelector('.rumbles-vote-pill') as HTMLElement | null;
+            this.channel = pill?.dataset.id ?? null;
         }
 
         if (this.channel !== null) {
@@ -38,16 +85,17 @@ export class Rumble extends Seed {
         }
     }
 
-    fetchEmotes() {
+    fetchEmotes(): void {
         const init = document.querySelector('body > script:not([src])');
         if (!init) return;
 
-        const code = init.textContent;
+        const code = init.textContent ?? '';
         const regex = /{items:(\[[^\(\)]*\]}\])}/;
         const match = code.match(regex);
 
         if (match) {
-            const itemsObj = eval(`"use strict";(${match[1]})`);
+            // eslint-disable-next-line no-eval
+            const itemsObj = eval(`"use strict";(${match[1]})`) as RumbleChannel[];
             itemsObj.forEach((channel) => {
                 if (channel.emotes !== undefined && channel.emotes.length > 0) {
                     channel.emotes.forEach((emote) => {
@@ -58,7 +106,7 @@ export class Rumble extends Seed {
         }
     }
 
-    receiveChatPairs(messages, users) {
+    receiveChatPairs(messages: RumbleMessage[], users: RumbleUser[]): void {
         this.prepareSubscriptions(messages, users).then((data) => {
             data.forEach((datum) => {
                 if (datum) this.receiveSubscriptions(datum);
@@ -70,22 +118,22 @@ export class Rumble extends Seed {
         });
     }
 
-    prepareChatMessages(messages, users) {
+    prepareChatMessages(messages: RumbleMessage[], users: RumbleUser[]): Promise<ChatMessage[]> {
         return Promise.all(messages
-            .filter(async (messageData) => {
-                messageData.text.trim() !== '';
+            .filter((messageData) => {
+                return messageData.text.trim() !== '';
             })
-            .map(async (messageData, index) => {
+            .map(async (messageData) => {
                 const message = new ChatMessage(
-                    uuidv5(messageData.id, this.namespace),
-                    this.platform,
-                    this.channel
+                    uuidv5(messageData.id, this.namespace!),
+                    this.platform!,
+                    this.channel!
                 );
 
                 const user = users.find((user) => user.id === messageData.user_id);
                 if (user === undefined) {
                     this.log('User not found:', messageData.user_id);
-                    return;
+                    return null;
                 }
 
                 message.sent_at = Date.parse(messageData.time);
@@ -141,20 +189,20 @@ export class Rumble extends Seed {
                 }
 
                 return message;
-            }));
+            })).then(msgs => msgs.filter((m): m is ChatMessage => m !== null));
     }
 
-    prepareSubscriptions(messages, users) {
+    prepareSubscriptions(messages: RumbleMessage[], users: RumbleUser[]): Promise<(RumbleSubscription | undefined)[]> {
         return Promise.all(messages
             .filter(messageData =>
-                messageData.hasOwnProperty('notification') ||
-                messageData.hasOwnProperty('gift_purchase_notification')
+                Object.prototype.hasOwnProperty.call(messageData, 'notification') ||
+                Object.prototype.hasOwnProperty.call(messageData, 'gift_purchase_notification')
             )
-            .map(async (messageData, index) => {
+            .map(async (messageData) => {
                 const user = users.find((user) => user.id === messageData.user_id);
                 if (user === undefined) {
                     this.log('User not found:', messageData.user_id);
-                    return;
+                    return undefined;
                 }
 
                 // Gift subscription purchase
@@ -180,9 +228,9 @@ export class Rumble extends Seed {
             }));
     }
 
-    onEventSourceMessage(es, event) {
+    onEventSourceMessage(es: EventSource, event: MessageEvent): void {
         try {
-            const json = JSON.parse(event.data);
+            const json = JSON.parse(event.data as string) as RumbleEventSourceData;
             switch (json.type) {
                 case 'init':
                 case 'messages':
@@ -200,16 +248,16 @@ export class Rumble extends Seed {
             }
         } catch (e) {
             this.log('EventSource received data with invalid JSON.', e, event.data);
-            this.recorder.recordEventSource(es.url, event.data, EventStatus.ERROR, null, null, e.message);
+            this.recorder.recordEventSource(es.url, event.data, EventStatus.ERROR, null, null, (e as Error).message);
         }
     }
 
-    async onFetchResponse(response) {
+    async onFetchResponse(response: Response): Promise<void> {
         try {
             const url = new URL(response.url);
             if (url.searchParams.get('name') == 'emote.list') {
                 const cloned = response.clone();
-                await cloned.json().then((json) => {
+                await cloned.json().then((json: { data: { items: RumbleChannel[] } }) => {
                     let emoteCount = 0;
                     json.data.items.forEach((channel) => {
                         if (channel.emotes !== undefined && channel.emotes.length > 0) {
@@ -230,23 +278,23 @@ export class Rumble extends Seed {
                 url: response.url,
                 method: 'GET',
                 statusCode: response.status,
-                payload: e.message
-            }, EventStatus.ERROR, null, e.message);
+                payload: (e as Error).message
+            }, EventStatus.ERROR, null, (e as Error).message);
         }
     }
 
-    onXhrOpen(xhr, method, url, async, user, password) {
+    onXhrOpen(xhr: XMLHttpRequest, _method: string, url: string, _async?: boolean, _user?: string, _password?: string): void {
         if (url.startsWith('https://wn0.rumble.com/service.php')) {
             xhr.addEventListener('readystatechange', (event) => this.onXhrServiceReadyStateChange(xhr, event));
         }
     }
 
-    onXhrServiceReadyStateChange(xhr, event) {
+    onXhrServiceReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
         if (xhr.readyState !== XMLHttpRequest.DONE) return;
 
         if (xhr.responseType === 'json') {
-            const json = xhr.response;
-            const viewers = parseInt(json?.data?.viewer_count || json?.data?.num_watching_now, 10);
+            const json = xhr.response as { data?: { viewer_count?: string; num_watching_now?: string } };
+            const viewers = parseInt(json?.data?.viewer_count || json?.data?.num_watching_now || '', 10);
             if (!isNaN(viewers)) {
                 this.sendViewerCount(viewers);
             }

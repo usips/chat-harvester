@@ -6,7 +6,39 @@
  * Format: @metadata :user!user@user.tmi.twitch.tv COMMAND #channel :message
  */
 
-import { Seed, ChatMessage, uuidv5, EventStatus } from '../core/index.js';
+import { Seed, ChatMessage, PatchedWebSocket } from '../core/index.js';
+
+interface IrcTags {
+    [key: string]: string;
+}
+
+interface ParsedIrcMessage {
+    raw: string;
+    tags: IrcTags;
+    meta?: IrcTags;
+    prefix: string | null;
+    command: string | null;
+    params: string[];
+    trailing: string | null;
+}
+
+interface ChatMessageExtra {
+    userId?: string;
+    color?: string;
+    badges?: string;
+}
+
+interface HermesMessage {
+    type: string;
+    notification?: {
+        pubsub?: string;
+    };
+}
+
+interface HermesPubsub {
+    type: string;
+    viewers?: number;
+}
 
 export class Twitch extends Seed {
     static hostname = 'twitch.tv';
@@ -14,23 +46,23 @@ export class Twitch extends Seed {
 
     constructor() {
         const is_popout = window.location.href.indexOf('/popout/') >= 0;
-        const channel = window.location.href.split('/').filter(x => x).at(is_popout ? 3 : 2);
+        const channel = window.location.href.split('/').filter(x => x).at(is_popout ? 3 : 2) ?? null;
 
         if (channel === 'p') {
             console.log('[CHUCK::Twitch] Within Twitch static /p/ directory: terminating.');
-            return null;
+            // Return early but still need to call super
+            super(Twitch.namespace, 'Twitch', 'invalid');
+            return;
         }
 
-        super(Twitch.namespace, 'Twitch', channel);
+        super(Twitch.namespace, 'Twitch', channel!);
     }
 
     /**
      * Parse IRC message tags (metadata) from Twitch format
-     * @param {string} tagsStr - Tags string without leading @
-     * @returns {Object} Parsed tags as key-value pairs
      */
-    parseIrcTags(tagsStr) {
-        const tags = {};
+    parseIrcTags(tagsStr: string): IrcTags {
+        const tags: IrcTags = {};
         if (!tagsStr) return tags;
 
         const pairs = tagsStr.split(';');
@@ -56,11 +88,9 @@ export class Twitch extends Seed {
     /**
      * Parse full IRC message into structured JSON
      * Format: @tags :prefix COMMAND params :trailing
-     * @param {string} message - Raw IRC message
-     * @returns {Object} Parsed message
      */
-    parseIrcMessageToJson(message) {
-        const result = {
+    parseIrcMessageToJson(message: string): ParsedIrcMessage {
+        const result: ParsedIrcMessage = {
             raw: message,
             tags: {},
             prefix: null,
@@ -92,7 +122,7 @@ export class Twitch extends Seed {
 
         // Find trailing (after " :")
         const trailingIdx = remaining.indexOf(' :');
-        let commandAndParams;
+        let commandAndParams: string;
         if (trailingIdx !== -1) {
             result.trailing = remaining.slice(trailingIdx + 2);
             commandAndParams = remaining.slice(0, trailingIdx);
@@ -113,10 +143,8 @@ export class Twitch extends Seed {
     /**
      * Extract username from IRC prefix
      * Format: nick!user@host.tmi.twitch.tv
-     * @param {string} prefix - IRC prefix
-     * @returns {string} Username or null
      */
-    extractUsername(prefix) {
+    extractUsername(prefix: string | null): string | null {
         if (!prefix) return null;
         const bangIdx = prefix.indexOf('!');
         if (bangIdx === -1) return prefix;
@@ -126,20 +154,16 @@ export class Twitch extends Seed {
     /**
      * Check if a badge type is present in badges string
      * Format: badge1/version,badge2/version,...
-     * @param {string} badges - Badges string
-     * @param {string} type - Badge type to check for
-     * @returns {boolean}
      */
-    hasBadge(badges, type) {
+    hasBadge(badges: string, type: string): boolean {
         if (!badges) return false;
         return badges.split(',').some(b => b.startsWith(type + '/'));
     }
 
     /**
      * Update channel from IRC params if changed (handles SPA navigation)
-     * @param {Array} params - IRC message params (first is #channel)
      */
-    updateChannelFromParams(params) {
+    updateChannelFromParams(params: string[]): void {
         if (!params || params.length === 0) return;
 
         const ircChannel = params[0];
@@ -155,14 +179,11 @@ export class Twitch extends Seed {
     /**
      * Parse Twitch emotes string into array
      * Format: emote_id:start-end,start-end/emote_id:start-end
-     * @param {string} emotesStr - Emotes string from IRC tags
-     * @param {string} message - Original message text
-     * @returns {Array} Array of [placeholder, url, name] tuples
      */
-    parseEmotes(emotesStr, message) {
+    parseEmotes(emotesStr: string, message: string): [string, string, string][] {
         if (!emotesStr || !message) return [];
 
-        const emotes = [];
+        const emotes: [string, string, string][] = [];
         const emoteGroups = emotesStr.split('/');
 
         for (const group of emoteGroups) {
@@ -191,10 +212,8 @@ export class Twitch extends Seed {
 
     /**
      * Convert parsed IRC PRIVMSG to ChatMessage
-     * @param {Object} parsed - Parsed IRC message
-     * @returns {ChatMessage|null}
      */
-    prepareChatMessage(parsed) {
+    prepareChatMessage(parsed: ParsedIrcMessage): (ChatMessage & { extra?: ChatMessageExtra }) | null {
         const tags = parsed.tags || parsed.meta || {};
         const messageText = parsed.trailing || '';
 
@@ -207,7 +226,7 @@ export class Twitch extends Seed {
             return null;
         }
 
-        const message = new ChatMessage(id, this.platform, this.channel);
+        const message = new ChatMessage(id, this.platform!, this.channel!) as ChatMessage & { extra?: ChatMessageExtra };
 
         // Set message content
         message.message = messageText;
@@ -239,10 +258,8 @@ export class Twitch extends Seed {
 
     /**
      * Handle incoming WebSocket messages
-     * @param {WebSocket} ws - WebSocket instance
-     * @param {MessageEvent} event - Message event
      */
-    onWebSocketMessage(ws, event) {
+    onWebSocketMessage(ws: PatchedWebSocket, event: MessageEvent): void {
         const data = event.data;
         if (typeof data !== 'string') {
             this.recordWebSocketIgnored(ws, 'in', data, 'BINARY', 'Non-string data');
@@ -264,14 +281,12 @@ export class Twitch extends Seed {
 
     /**
      * Process Hermes PubSub WebSocket messages
-     * @param {WebSocket} ws - WebSocket instance
-     * @param {string} data - Message data
      */
-    processHermesMessage(ws, data) {
-        let json;
+    processHermesMessage(ws: PatchedWebSocket, data: string): void {
+        let json: HermesMessage;
         try {
-            json = JSON.parse(data);
-        } catch (e) {
+            json = JSON.parse(data) as HermesMessage;
+        } catch {
             this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_INVALID', 'Invalid JSON');
             return;
         }
@@ -302,21 +317,18 @@ export class Twitch extends Seed {
 
     /**
      * Process Hermes notification messages
-     * @param {WebSocket} ws - WebSocket instance
-     * @param {string} data - Raw message data
-     * @param {Object} json - Parsed message
      */
-    processHermesNotification(ws, data, json) {
+    processHermesNotification(ws: PatchedWebSocket, data: string, json: HermesMessage): void {
         const pubsubData = json.notification?.pubsub;
         if (!pubsubData) {
             this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_NOTIFICATION', 'No pubsub data');
             return;
         }
 
-        let pubsub;
+        let pubsub: HermesPubsub;
         try {
-            pubsub = JSON.parse(pubsubData);
-        } catch (e) {
+            pubsub = JSON.parse(pubsubData) as HermesPubsub;
+        } catch {
             this.recordWebSocketIgnored(ws, 'in', data, 'HERMES_NOTIFICATION', 'Invalid pubsub JSON');
             return;
         }
@@ -353,10 +365,8 @@ export class Twitch extends Seed {
 
     /**
      * Process a single IRC line
-     * @param {WebSocket} ws - WebSocket instance
-     * @param {string} line - IRC line
      */
-    processIrcLine(ws, line) {
+    processIrcLine(ws: PatchedWebSocket, line: string): void {
         // Handle PING
         if (line === 'PING :tmi.twitch.tv') {
             this.recordWebSocketIgnored(ws, 'in', line, 'PING', 'Keepalive ping');
@@ -465,10 +475,8 @@ export class Twitch extends Seed {
 
     /**
      * Handle outgoing WebSocket messages
-     * @param {WebSocket} ws - WebSocket instance
-     * @param {string} message - Outgoing message
      */
-    onWebSocketSend(ws, message) {
+    onWebSocketSend(ws: PatchedWebSocket, message: unknown): void {
         if (typeof message !== 'string') return;
 
         const parsed = this.parseIrcMessageToJson(message);
@@ -478,9 +486,8 @@ export class Twitch extends Seed {
 
     /**
      * Handle fetch responses - ignore Twitch API/GQL calls
-     * @param {Response} response - Fetch response
      */
-    async onFetchResponse(response) {
+    async onFetchResponse(response: Response): Promise<void> {
         // Twitch uses GQL for most API calls - we don't need any of them
         // Chat comes through IRC WebSocket, viewer counts through Hermes
         this.recordFetchIgnored(response.url, 'GET', response.status, 'Twitch API/GQL');

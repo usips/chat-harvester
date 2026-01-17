@@ -16,6 +16,6 @@ import { registerAllPlatforms, detectPlatform } from './platforms/index.js';
     const platform = await detectPlatform();
 
     // Store reference in window for debugging
-    WINDOW.CHUCK = platform;
-    WINDOW.chuck = platform; // Lowercase alias for console convenience
+    WINDOW.CHUCK = platform ?? undefined;
+    WINDOW.chuck = platform ?? undefined; // Lowercase alias for console convenience
 })();

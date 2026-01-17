@@ -3,7 +3,7 @@
  * Platform registry and detection
  */
 
-import { Config, WINDOW } from '../core/index.js';
+import { Config, WINDOW, Seed } from '../core/index.js';
 
 // Import all platforms
 import Facebook from './facebook.js';
@@ -16,27 +16,30 @@ import VK from './vk.js';
 import X from './x.js';
 import XMRChat from './xmrchat.js';
 
+// Platform constructor type
+type PlatformConstructor = new () => Seed;
+
 // Platform registry
-const platforms = new Map();
+const platforms = new Map<string, PlatformConstructor>();
 
 /**
  * Register a platform class with its hostname(s)
  */
-export function registerPlatform(hostname, PlatformClass) {
+export function registerPlatform(hostname: string, PlatformClass: PlatformConstructor): void {
     platforms.set(hostname, PlatformClass);
 }
 
 /**
  * Get all registered platforms
  */
-export function getPlatforms() {
+export function getPlatforms(): Map<string, PlatformConstructor> {
     return platforms;
 }
 
 /**
  * Detect and instantiate the appropriate platform for current hostname
  */
-export async function detectPlatform() {
+export async function detectPlatform(): Promise<Seed | null> {
     const hostname = window.location.hostname;
     const Platform = platforms.get(hostname);
 
@@ -49,11 +52,11 @@ export async function detectPlatform() {
     const platformKey = Platform.name.toLowerCase();
     try {
         const platformConfig = await Config.get('platforms', {});
-        if (platformConfig[platformKey] === false) {
+        if ((platformConfig as Record<string, boolean>)[platformKey] === false) {
             console.log(`[CHUCK] Platform ${Platform.name} is disabled in config.`);
             return null;
         }
-    } catch (e) {
+    } catch {
         // Config not available, proceed anyway
     }
 
@@ -63,7 +66,7 @@ export async function detectPlatform() {
 /**
  * Initialize all platform registrations
  */
-export function registerAllPlatforms() {
+export function registerAllPlatforms(): void {
     // Facebook
     registerPlatform('facebook.com', Facebook);
     registerPlatform('www.facebook.com', Facebook);

@@ -3,6 +3,8 @@
  * Debug Recorder - Captures all intercepted traffic for analysis
  */
 
+import type { ChatMessage } from './message.js';
+
 /**
  * Event status indicating how CHUCK processed the event
  */
@@ -11,7 +13,9 @@ export const EventStatus = {
     IGNORED: 'ignored',      // Recognized but intentionally skipped
     UNHANDLED: 'unhandled',  // Unknown event type, no handler
     ERROR: 'error',          // Handler threw an error
-};
+} as const;
+
+export type EventStatusType = typeof EventStatus[keyof typeof EventStatus];
 
 /**
  * Event types for categorization
@@ -33,12 +37,64 @@ export const EventType = {
     CHAT_MESSAGE: 'chat_message',  // Parsed chat message sent to backend
     VIEWER_COUNT: 'viewer_count',  // Viewer count update
     MESSAGE_REMOVAL: 'message_removal',  // Message deletion
-};
+} as const;
+
+export type EventTypeType = typeof EventType[keyof typeof EventType];
+
+export interface RecordEventData {
+    url?: string;
+    payload?: unknown;
+    method?: string;
+    statusCode?: number;
+    headers?: Record<string, string>;
+    eventName?: string | null;
+}
+
+export interface RecordedEvent {
+    timestamp: number;
+    relativeTime: number;
+    type: EventTypeType | string;
+    status: EventStatusType;
+    url: string | null;
+    payload: string | null;
+    payloadSize: number;
+    parsed: string | null;
+    note: string | null;
+    meta: {
+        method: string | null;
+        statusCode: number | null;
+        headers: Record<string, string> | null;
+        eventName: string | null;
+    };
+}
+
+export interface RecorderStats {
+    platform: string;
+    recording: boolean;
+    totalEvents: number;
+    duration: number;
+    byType: Record<string, number>;
+    byStatus: Record<string, number>;
+}
+
+export interface RecorderExport {
+    platform: string;
+    recordingStarted: string | null;
+    recordingEnded: string;
+    stats: RecorderStats;
+    events: RecordedEvent[];
+}
 
 /**
  * Debug recorder that captures all intercepted traffic
  */
 export class Recorder {
+    platform: string;
+    events: RecordedEvent[];
+    recording: boolean;
+    startTime: number | null;
+    maxEvents: number;
+
     constructor(platform = 'Unknown') {
         this.platform = platform;
         this.events = [];
@@ -50,7 +106,7 @@ export class Recorder {
     /**
      * Start recording events
      */
-    start() {
+    start(): void {
         if (this.recording) {
             console.log('[CHUCK Recorder] Already recording');
             return;
@@ -64,7 +120,7 @@ export class Recorder {
     /**
      * Stop recording events
      */
-    stop() {
+    stop(): void {
         if (!this.recording) {
             console.log('[CHUCK Recorder] Not currently recording');
             return;
@@ -75,13 +131,14 @@ export class Recorder {
 
     /**
      * Record an event
-     * @param {string} type - Event type from EventType
-     * @param {object} data - Event data
-     * @param {string} status - Event status from EventStatus
-     * @param {object} parsed - Parsed result (ChatMessage, etc.) if any
-     * @param {string} note - Optional note about why event was ignored/unhandled
      */
-    record(type, data, status = EventStatus.UNHANDLED, parsed = null, note = null) {
+    record(
+        type: EventTypeType | string,
+        data: RecordEventData,
+        status: EventStatusType = EventStatus.UNHANDLED,
+        parsed: unknown = null,
+        note: string | null = null
+    ): void {
         if (!this.recording) return;
 
         // Prevent memory overflow
@@ -91,22 +148,22 @@ export class Recorder {
             return;
         }
 
-        const event = {
+        const event: RecordedEvent = {
             timestamp: Date.now(),
-            relativeTime: Date.now() - this.startTime,
+            relativeTime: Date.now() - (this.startTime ?? 0),
             type,
             status,
-            url: data.url || null,
+            url: data.url ?? null,
             payload: this._safeStringify(data.payload),
             payloadSize: this._getSize(data.payload),
             parsed: parsed ? this._safeStringify(parsed) : null,
             note,
             // Additional metadata
             meta: {
-                method: data.method || null,
-                statusCode: data.statusCode || null,
-                headers: data.headers || null,
-                eventName: data.eventName || null,  // For WebSocket events like "App\\Events\\ChatMessageEvent"
+                method: data.method ?? null,
+                statusCode: data.statusCode ?? null,
+                headers: data.headers ?? null,
+                eventName: data.eventName ?? null,  // For WebSocket events like "App\\Events\\ChatMessageEvent"
             }
         };
 
@@ -116,7 +173,15 @@ export class Recorder {
     /**
      * Record a WebSocket message
      */
-    recordWebSocket(direction, url, payload, status = EventStatus.UNHANDLED, parsed = null, eventName = null, note = null) {
+    recordWebSocket(
+        direction: 'in' | 'out',
+        url: string,
+        payload: unknown,
+        status: EventStatusType = EventStatus.UNHANDLED,
+        parsed: unknown = null,
+        eventName: string | null = null,
+        note: string | null = null
+    ): void {
         const type = direction === 'in' ? EventType.WS_MESSAGE : EventType.WS_SEND;
         this.record(type, { url, payload, eventName }, status, parsed, note);
     }
@@ -124,36 +189,59 @@ export class Recorder {
     /**
      * Record a Fetch response
      */
-    recordFetch(url, method, statusCode, payload, status = EventStatus.UNHANDLED, parsed = null, note = null) {
+    recordFetch(
+        url: string,
+        method: string,
+        statusCode: number,
+        payload: unknown,
+        status: EventStatusType = EventStatus.UNHANDLED,
+        parsed: unknown = null,
+        note: string | null = null
+    ): void {
         this.record(EventType.FETCH_RESPONSE, { url, method, statusCode, payload }, status, parsed, note);
     }
 
     /**
      * Record an XHR response
      */
-    recordXhr(url, method, statusCode, payload, status = EventStatus.UNHANDLED, parsed = null, note = null) {
+    recordXhr(
+        url: string,
+        method: string,
+        statusCode: number,
+        payload: unknown,
+        status: EventStatusType = EventStatus.UNHANDLED,
+        parsed: unknown = null,
+        note: string | null = null
+    ): void {
         this.record(EventType.XHR_RESPONSE, { url, method, statusCode, payload }, status, parsed, note);
     }
 
     /**
      * Record an EventSource message
      */
-    recordEventSource(url, payload, status = EventStatus.UNHANDLED, parsed = null, eventName = null, note = null) {
+    recordEventSource(
+        url: string,
+        payload: unknown,
+        status: EventStatusType = EventStatus.UNHANDLED,
+        parsed: unknown = null,
+        eventName: string | null = null,
+        note: string | null = null
+    ): void {
         this.record(EventType.EVENTSOURCE_MESSAGE, { url, payload, eventName }, status, parsed, note);
     }
 
     /**
      * Record a parsed chat message that was sent to backend
      */
-    recordChatMessage(message) {
+    recordChatMessage(message: ChatMessage): void {
         this.record(EventType.CHAT_MESSAGE, { payload: message }, EventStatus.HANDLED, message);
     }
 
     /**
      * Get recording statistics
      */
-    getStats() {
-        const stats = {
+    getStats(): RecorderStats {
+        const stats: RecorderStats = {
             platform: this.platform,
             recording: this.recording,
             totalEvents: this.events.length,
@@ -173,21 +261,21 @@ export class Recorder {
     /**
      * Get only unhandled events (useful for finding missing handlers)
      */
-    getUnhandled() {
+    getUnhandled(): RecordedEvent[] {
         return this.events.filter(e => e.status === EventStatus.UNHANDLED);
     }
 
     /**
      * Get events by type
      */
-    getByType(type) {
+    getByType(type: EventTypeType | string): RecordedEvent[] {
         return this.events.filter(e => e.type === type);
     }
 
     /**
      * Export recording as JSON object
      */
-    export() {
+    export(): RecorderExport {
         return {
             platform: this.platform,
             recordingStarted: this.startTime ? new Date(this.startTime).toISOString() : null,
@@ -200,7 +288,7 @@ export class Recorder {
     /**
      * Download recording as JSON file
      */
-    download(filename = null) {
+    download(filename: string | null = null): void {
         const data = this.export();
         const json = JSON.stringify(data, null, 2);
         const blob = new Blob([json], { type: 'application/json' });
@@ -223,7 +311,7 @@ export class Recorder {
     /**
      * Clear all recorded events
      */
-    clear() {
+    clear(): void {
         this.events = [];
         this.startTime = null;
         console.log('[CHUCK Recorder] Cleared all events');
@@ -232,13 +320,13 @@ export class Recorder {
     /**
      * Safely stringify any value, handling circular references
      */
-    _safeStringify(value) {
+    private _safeStringify(value: unknown): string | null {
         if (value === undefined || value === null) return null;
         if (typeof value === 'string') return value;
 
         try {
             const seen = new WeakSet();
-            return JSON.stringify(value, (key, val) => {
+            return JSON.stringify(value, (_key, val) => {
                 if (typeof val === 'object' && val !== null) {
                     if (seen.has(val)) return '[Circular]';
                     seen.add(val);
@@ -246,14 +334,14 @@ export class Recorder {
                 return val;
             });
         } catch (e) {
-            return `[Stringify Error: ${e.message}]`;
+            return `[Stringify Error: ${(e as Error).message}]`;
         }
     }
 
     /**
      * Get size of payload in bytes
      */
-    _getSize(value) {
+    private _getSize(value: unknown): number {
         if (!value) return 0;
         if (typeof value === 'string') return value.length;
         try {
@@ -266,7 +354,7 @@ export class Recorder {
     /**
      * Format byte size for display
      */
-    _formatSize(bytes) {
+    private _formatSize(bytes: number): string {
         if (bytes < 1024) return `${bytes} B`;
         if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
         return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;

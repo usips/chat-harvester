@@ -8,8 +8,8 @@ module.exports = (env = {}) => {
     return {
         mode: 'production',
         entry: {
-            'injected': path.resolve(__dirname, 'src/userscript.js'),
-            'content-script': path.resolve(__dirname, 'src/content-script.js'),
+            'injected': path.resolve(__dirname, 'src/userscript.ts'),
+            'content-script': path.resolve(__dirname, 'src/content-script.ts'),
         },
         output: {
             filename: '[name].js',
@@ -17,8 +17,11 @@ module.exports = (env = {}) => {
             clean: true,
         },
         resolve: {
-            extensions: ['.js'],
+            extensions: ['.ts', '.js'],
             fullySpecified: false,
+            extensionAlias: {
+                '.js': ['.ts', '.js'],
+            },
         },
         target: 'web',
         optimization: {
@@ -49,6 +52,11 @@ module.exports = (env = {}) => {
         ],
         module: {
             rules: [
+                {
+                    test: /\.ts$/,
+                    use: 'ts-loader',
+                    exclude: /node_modules/,
+                },
                 {
                     test: /\.js$/,
                     type: 'javascript/auto',

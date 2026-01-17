@@ -11,17 +11,24 @@
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('injected.js');
 script.onload = function() {
-    this.remove();
+    (this as HTMLScriptElement).remove();
 };
 (document.head || document.documentElement).appendChild(script);
 
+interface ChuckMessage {
+    source: string;
+    type: string;
+    message?: string;
+}
+
 // Listen for messages from the injected script
-window.addEventListener('message', (event) => {
+window.addEventListener('message', (event: MessageEvent) => {
     if (event.source !== window) return;
-    if (!event.data || event.data.source !== 'CHUCK') return;
+    const data = event.data as ChuckMessage | null;
+    if (!data || data.source !== 'CHUCK') return;
 
     // Forward messages to background script if needed
-    if (event.data.type === 'log') {
-        console.log('[CHUCK Content]', event.data.message);
+    if (data.type === 'log') {
+        console.log('[CHUCK Content]', data.message);
     }
 });

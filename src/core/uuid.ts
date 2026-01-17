@@ -9,22 +9,22 @@
 const UUID_REGEX = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i;
 
 // Byte to hex lookup table
-const byteToHex = [];
+const byteToHex: string[] = [];
 for (let i = 0; i < 256; ++i) {
     byteToHex.push((i + 256).toString(16).substr(1));
 }
 
-function validate(uuid) {
+function validate(uuid: string): boolean {
     return typeof uuid === 'string' && UUID_REGEX.test(uuid);
 }
 
-function parse(uuid) {
+function parse(uuid: string): Uint8Array {
     if (!validate(uuid)) {
         throw TypeError('Invalid UUID');
     }
 
     const bytes = new Uint8Array(16);
-    let v;
+    let v: number;
 
     v = parseInt(uuid.slice(0, 8), 16);
     bytes[0] = v >>> 24;
@@ -55,7 +55,7 @@ function parse(uuid) {
     return bytes;
 }
 
-function stringify(bytes, offset = 0) {
+function stringify(bytes: Uint8Array | number[], offset = 0): string {
     const uuid = (
         byteToHex[bytes[offset + 0]] +
         byteToHex[bytes[offset + 1]] +
@@ -83,24 +83,25 @@ function stringify(bytes, offset = 0) {
 }
 
 // SHA-1 helper functions
-function f(s, x, y, z) {
+function f(s: number, x: number, y: number, z: number): number {
     switch (s) {
         case 0: return x & y ^ ~x & z;
         case 1: return x ^ y ^ z;
         case 2: return x & y ^ x & z ^ y & z;
         case 3: return x ^ y ^ z;
+        default: return 0;
     }
 }
 
-function rotl(x, n) {
+function rotl(x: number, n: number): number {
     return x << n | x >>> 32 - n;
 }
 
-function sha1(data) {
+function sha1(data: Uint8Array | number[] | string): number[] {
     const K = [1518500249, 1859775393, 2400959708, 3395469782];
     const H = [1732584193, 4023233417, 2562383102, 271733878, 3285377520];
 
-    let bytes;
+    let bytes: number[];
     if (typeof data === 'string') {
         const encoded = unescape(encodeURIComponent(data));
         bytes = [];
@@ -117,7 +118,7 @@ function sha1(data) {
 
     const l = bytes.length / 4 + 2;
     const N = Math.ceil(l / 16);
-    const M = new Array(N);
+    const M: Uint32Array[] = new Array(N);
 
     for (let i = 0; i < N; ++i) {
         const block = new Uint32Array(16);
@@ -174,13 +175,10 @@ function sha1(data) {
 
 /**
  * Generate a v5 UUID from a name and namespace
- * @param {string} name - The name to hash
- * @param {string} namespace - The namespace UUID
- * @returns {string} The generated UUID
  */
-export function uuidv5(name, namespace) {
+export function uuidv5(name: string | number[], namespace: string | Uint8Array): string {
     // Convert name to bytes
-    let nameBytes;
+    let nameBytes: number[];
     if (typeof name === 'string') {
         const encoded = unescape(encodeURIComponent(name));
         nameBytes = [];
@@ -192,7 +190,7 @@ export function uuidv5(name, namespace) {
     }
 
     // Parse namespace
-    let namespaceBytes;
+    let namespaceBytes: Uint8Array;
     if (typeof namespace === 'string') {
         namespaceBytes = parse(namespace);
     } else {

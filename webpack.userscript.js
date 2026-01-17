@@ -10,14 +10,17 @@ const userscriptHeader = fs.readFileSync(
 
 module.exports = {
     mode: 'production',
-    entry: path.resolve(__dirname, 'src/userscript.js'),
+    entry: path.resolve(__dirname, 'src/userscript.ts'),
     output: {
         filename: 'chuck.user.js',
         path: path.resolve(__dirname, 'dist'),
     },
     resolve: {
-        extensions: ['.js'],
+        extensions: ['.ts', '.js'],
         fullySpecified: false,
+        extensionAlias: {
+            '.js': ['.ts', '.js'],
+        },
     },
     target: 'web',
     optimization: {
@@ -35,6 +38,11 @@ module.exports = {
     ],
     module: {
         rules: [
+            {
+                test: /\.ts$/,
+                use: 'ts-loader',
+                exclude: /node_modules/,
+            },
             {
                 test: /\.js$/,
                 type: 'javascript/auto',
