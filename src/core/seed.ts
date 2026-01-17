@@ -400,7 +400,7 @@ export class Seed {
         Object.defineProperty(newEventSource, 'OPEN', { value: 1 });
         Object.defineProperty(newEventSource, 'CLOSED', { value: 2 });
         Object.defineProperty(newEventSource, 'prototype', { value: oldEventSource.prototype });
-        WINDOW.EventSource = Object.assign(newEventSource, oldEventSource);
+        WINDOW.EventSource = newEventSource;
         return WINDOW.EventSource;
     }
 
