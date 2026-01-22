@@ -339,7 +339,7 @@ export class YouTube extends Seed {
                 );
                 message.username = renderer!.authorName.simpleText;
                 message.avatar = renderer!.authorPhoto.thumbnails.at(-1)!.url;
-                message.sent_at = parseInt(renderer!.timestampUsec) / 1000;
+                message.sent_at = Math.floor(parseInt(renderer!.timestampUsec) / 1000);
 
                 const badges = renderer!.authorBadges;
                 message.is_verified = hasBadge(badges, 'VERIFIED');
@@ -381,7 +381,7 @@ export class YouTube extends Seed {
                 );
                 message.username = giftingEvent.authorName.simpleText;
                 message.avatar = giftingEvent.authorPhoto.thumbnails.at(-1)!.url;
-                message.sent_at = parseInt(giftingEvent.timestampUsec) / 1000;
+                message.sent_at = Math.floor(parseInt(giftingEvent.timestampUsec) / 1000);
                 message.message = `${giftingEvent.authorName.simpleText} gifted ${giftingEvent.numGiftedMembers} memberships!`;
                 message.currency = 'USD';
                 message.amount = 5.00;
@@ -396,7 +396,7 @@ export class YouTube extends Seed {
                 );
                 message.username = giftReceivedEvent.authorName.simpleText;
                 message.avatar = giftReceivedEvent.authorPhoto.thumbnails.at(-1)!.url;
-                message.sent_at = parseInt(giftReceivedEvent.timestampUsec) / 1000;
+                message.sent_at = Math.floor(parseInt(giftReceivedEvent.timestampUsec) / 1000);
                 message.message = `${giftReceivedEvent.authorName.simpleText} received a gifted membership!`;
                 message.currency = 'USD';
                 message.amount = (giftReceivedEvent.numGiftedMembers ?? 1) * 5.00;
@@ -408,7 +408,7 @@ export class YouTube extends Seed {
                     this.platform!,
                     this.channel!
                 );
-                message.sent_at = parseInt(action.item.liveChatPlaceholderItemRenderer.timestampUsec) / 1000;
+                message.sent_at = Math.floor(parseInt(action.item.liveChatPlaceholderItemRenderer.timestampUsec) / 1000);
                 message.is_placeholder = true;
                 return message;
             } else {
@@ -478,7 +478,7 @@ export class YouTube extends Seed {
 
         const channel_match = author_url.match(/(?:\/channel\/|@)([^\/]+)/);
         if (channel_match && channel_match[1]) {
-            this.channel = channel_match[1];
+            this.setChannel(channel_match[1]);
         } else {
             this.log('Could not find a channel ID in the URL. URL:', author_url);
         }
