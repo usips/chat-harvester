@@ -172,7 +172,7 @@ export class Twitch extends Seed {
         const newChannel = ircChannel.slice(1); // Remove leading #
         if (newChannel && newChannel !== this.channel) {
             this.log(`Channel changed: ${this.channel} → ${newChannel}`);
-            this.channel = newChannel;
+            this.setChannel(newChannel);
         }
     }
 

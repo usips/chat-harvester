@@ -72,15 +72,17 @@ export class Rumble extends Seed {
 
     onDocumentReady(): void {
         // Pop-out chat contains the channel ID in the URL
+        let channel: string | null = null;
         if (window.location.href.indexOf('/chat/popup/') >= 0) {
-            this.channel = String(parseInt(window.location.href.split('/').filter(x => x)[4], 10));
+            channel = String(parseInt(window.location.href.split('/').filter(x => x)[4], 10));
         } else {
             // Otherwise, find the channel ID in the DOM (upvote button)
             const pill = document.querySelector('.rumbles-vote-pill') as HTMLElement | null;
-            this.channel = pill?.dataset.id ?? null;
+            channel = pill?.dataset.id ?? null;
         }
 
-        if (this.channel !== null) {
+        if (channel !== null) {
+            this.setChannel(channel);
             this.fetchEmotes();
         }
     }
