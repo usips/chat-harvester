@@ -247,6 +247,34 @@ export class Seed {
         this._debug('Chat socket opened.');
         this.sendChatMessages(this.chatMessageQueue);
         this.chatMessageQueue = [];
+        this.flushUpdateQueue();
+    }
+
+    /**
+     * Set the channel and flush any queued updates
+     * Use this instead of setting channel directly when channel info is async
+     */
+    setChannel(channel: string): void {
+        this.channel = channel;
+        this.flushUpdateQueue();
+    }
+
+    /**
+     * Flush the update queue if both socket is open and channel is set
+     */
+    flushUpdateQueue(): void {
+        const ws_open = this.chatSocket?.readyState === WebSocket.OPEN;
+        const seed_ready = this.channel !== null;
+
+        if (ws_open && seed_ready && this.updateQueue.length > 0) {
+            this.log('Flushing', this.updateQueue.length, 'queued updates.');
+            for (const update of this.updateQueue) {
+                // Update the channel in case it was null when queued
+                update.channel = this.channel!;
+                this.chatSocket!.send(JSON.stringify(update));
+            }
+            this.updateQueue = [];
+        }
     }
 
     onChatSocketMessage(_ws: PatchedWebSocket, event: MessageEvent): void {
