@@ -180,8 +180,39 @@ export class YouTube extends Seed {
     private _cssInjected = false;
 
     constructor() {
-        const channel = null; // Cannot be determined before DOM is ready
+        // Extract video ID from URL immediately to use as channel
+        // This prevents race conditions where messages arrive before DOMContentLoaded
+        const channel = YouTube._extractVideoIdFromUrl();
         super(YouTube.namespace, 'YouTube', channel!);
+
+        if (channel) {
+            this.log('Extracted video ID from URL:', channel);
+        }
+    }
+
+    /**
+     * Extract video ID from current URL for immediate use
+     */
+    private static _extractVideoIdFromUrl(): string | null {
+        const url = new URL(window.location.href);
+
+        // /watch?v=VIDEO_ID
+        if (url.pathname.startsWith('/watch')) {
+            return url.searchParams.get('v');
+        }
+
+        // /live/VIDEO_ID
+        if (url.pathname.startsWith('/live/')) {
+            const pathPart = url.pathname.split('/live/')[1];
+            return pathPart ? pathPart.split('/')[0].split('?')[0] : null;
+        }
+
+        // /live_chat?v=VIDEO_ID (chat popup)
+        if (url.pathname.includes('/live_chat')) {
+            return url.searchParams.get('v');
+        }
+
+        return null;
     }
 
     /**
@@ -459,7 +490,9 @@ export class YouTube extends Seed {
             if (url.pathname.startsWith('/watch')) {
                 video_id = url.searchParams.get('v');
             } else if (url.pathname.startsWith('/live/')) {
-                video_id = url.pathname.split('/live/')[1];
+                // /live/VIDEO_ID or /live/VIDEO_ID?feature=share
+                const pathPart = url.pathname.split('/live/')[1];
+                video_id = pathPart ? pathPart.split('/')[0].split('?')[0] : null;
             }
         }
 
@@ -470,9 +503,25 @@ export class YouTube extends Seed {
 
         this.log('Video ID:', video_id, 'Chat only:', is_chat_only);
 
-        const author_url = await fetch(`https://www.youtube.com/oembed?url=http%3A//youtube.com/watch%3Fv%3D${video_id}&format=json`)
-            .then(response => response.json())
-            .then((json: YTOembedResponse) => json.author_url);
+        let author_url: string | null = null;
+        try {
+            const oembedResponse = await fetch(`https://www.youtube.com/oembed?url=http%3A//youtube.com/watch%3Fv%3D${video_id}&format=json`);
+            if (oembedResponse.ok) {
+                const json = await oembedResponse.json() as YTOembedResponse;
+                author_url = json.author_url;
+            } else {
+                this.warn('Oembed fetch failed with status:', oembedResponse.status);
+            }
+        } catch (e) {
+            this.warn('Oembed fetch error:', e);
+        }
+
+        // Fallback: use video_id as channel if oembed fails
+        if (!author_url) {
+            this.warn('Could not get author URL from oembed, using video_id as channel fallback');
+            this.setChannel(video_id);
+            return;
+        }
 
         this.log('Author URL:', author_url);
 
