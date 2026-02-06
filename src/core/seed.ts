@@ -386,6 +386,7 @@ export class Seed {
         message.username = sub.buyer;
         message.amount = sub.value * sub.count;
         message.currency = 'USD';
+        message.is_subscription = true;
 
         if (sub.gifted) {
             if (sub.count > 1) {

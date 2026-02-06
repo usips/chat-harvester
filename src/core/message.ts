@@ -50,6 +50,7 @@ export class ChatMessage {
     is_mod: boolean;
     is_owner: boolean;
     is_staff: boolean;
+    is_subscription: boolean;
 
     constructor(id: string, platform: string, channel: string) {
         this.id = id;
@@ -73,5 +74,6 @@ export class ChatMessage {
         this.is_mod = false;
         this.is_owner = false;
         this.is_staff = false;
+        this.is_subscription = false;
     }
 }
