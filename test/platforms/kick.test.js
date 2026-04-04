@@ -139,6 +139,107 @@ describe('Kick Platform', () => {
         });
     });
 
+    describe('SubscriptionGifted event', () => {
+        let kick;
+
+        beforeEach(() => {
+            kick = Object.create(Kick.prototype);
+            kick.platform = 'Kick';
+            kick.channel = 'testchannel';
+            kick.namespace = Kick.namespace;
+            kick.log = vi.fn();
+            kick.warn = vi.fn();
+            kick.viewers = null;
+            kick.chatSocket = null;
+            kick.updateQueue = [];
+            kick.chatMessageQueue = [];
+            kick.recorder = { recordChatMessage: vi.fn() };
+        });
+
+        it('should parse new format multi-user gifted subs', () => {
+            const event = kickEvents.SubscriptionGifted;
+            const data = JSON.parse(event.data);
+
+            // Simulate what onWebSocketMessage does for the new format
+            let buyer, count, id;
+            if ('user' in data && data.gifted_users) {
+                buyer = data.user.username;
+                count = data.gifted_users.length;
+                id = data.id;
+            }
+
+            expect(buyer).toBe('Profileo');
+            expect(count).toBe(5);
+            expect(id).toBe('328bc7ec-1ffe-48f2-ab09-abd5998b63b8');
+        });
+
+        it('should parse new format single-user gifted sub', () => {
+            const event = kickEvents.SubscriptionGiftedSingle;
+            const data = JSON.parse(event.data);
+
+            expect(data.user.username).toBe('Atomic_Angel');
+            expect(data.gifted_users).toHaveLength(1);
+            expect(data.gifted_users[0].username).toBe('Judachu');
+        });
+
+        it('should parse legacy format gifted subs', () => {
+            const event = kickEvents.GiftedSubscriptionsEventLegacy;
+            const data = JSON.parse(event.data);
+
+            let buyer, count;
+            if ('gifter_username' in data) {
+                buyer = data.gifter_username;
+                count = data.gifted_usernames.length;
+            }
+
+            expect(buyer).toBe('court');
+            expect(count).toBe(1);
+        });
+
+        it('should create subscription message via receiveSubscriptions for new format', () => {
+            const event = kickEvents.SubscriptionGifted;
+            const data = JSON.parse(event.data);
+
+            kick.receiveSubscriptions({
+                id: data.id,
+                gifted: true,
+                buyer: data.user.username,
+                count: data.gifted_users.length,
+                value: 5,
+            });
+
+            // receiveSubscriptions calls sendChatMessages which queues
+            expect(kick.updateQueue.length).toBe(1);
+            const update = kick.updateQueue[0];
+            expect(update.messages).toHaveLength(1);
+
+            const msg = update.messages[0];
+            expect(msg.username).toBe('Profileo');
+            expect(msg.amount).toBe(25); // 5 * 5 gifted
+            expect(msg.currency).toBe('USD');
+            expect(msg.is_subscription).toBe(true);
+            expect(msg.message).toBe('Profileo gifted 5 subscriptions!');
+        });
+
+        it('should create subscription message for single gift', () => {
+            const event = kickEvents.SubscriptionGiftedSingle;
+            const data = JSON.parse(event.data);
+
+            kick.receiveSubscriptions({
+                id: data.id,
+                gifted: true,
+                buyer: data.user.username,
+                count: data.gifted_users.length,
+                value: 5,
+            });
+
+            const msg = kick.updateQueue[0].messages[0];
+            expect(msg.username).toBe('Atomic_Angel');
+            expect(msg.amount).toBe(5); // 5 * 1 gifted
+            expect(msg.message).toBe('Atomic_Angel gifted a subscription!');
+        });
+    });
+
     describe('KicksGifted event', () => {
         let kick;
 

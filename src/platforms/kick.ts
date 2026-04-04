@@ -47,10 +47,17 @@ interface KickDeletedMessage {
     violatedRules?: string[];
 }
 
-interface KickGiftedSubs {
-    username: string;
+interface KickGiftedSubsLegacy {
     gifter_username: string;
     gifted_usernames: string[];
+}
+
+interface KickGiftedSubsNew {
+    id: string;
+    user: { id: number; slug: string; username: string };
+    gift: { tier: number };
+    gifted_users: { id: number; slug: string; username: string }[];
+    created_at: string;
 }
 
 interface KickSubscription {
@@ -226,13 +233,36 @@ export class Kick extends Seed {
                 break;
             }
 
+            case 'SubscriptionGifted':
+            case 'App\\Events\\ChannelSubscriptionEvent':
             case 'App\\Events\\GiftedSubscriptionsEvent': {
-                const giftData = JSON.parse(json.data as string) as KickGiftedSubs;
+                const giftData = JSON.parse(json.data as string) as KickGiftedSubsNew | KickGiftedSubsLegacy;
+
+                let buyer: string;
+                let count: number;
+                let id: string;
+
+                if ('user' in giftData && giftData.gifted_users) {
+                    // New format: { user: {username}, gifted_users: [{username}, ...] }
+                    buyer = giftData.user.username;
+                    count = giftData.gifted_users.length;
+                    id = giftData.id;
+                } else if ('gifter_username' in giftData) {
+                    // Legacy format: { gifter_username, gifted_usernames: string[] }
+                    buyer = giftData.gifter_username;
+                    count = giftData.gifted_usernames.length;
+                    id = `${Date.now()}_${buyer}`;
+                } else {
+                    this.warn('Unknown gifted subscription format', giftData);
+                    this.recordWebSocketUnhandled(ws, 'in', event.data, json.event ?? 'unknown');
+                    break;
+                }
+
                 this.receiveSubscriptions({
-                    id: `${Date.now()}_${giftData.username}`,
+                    id,
                     gifted: true,
-                    buyer: giftData.gifter_username,
-                    count: giftData.gifted_usernames.length,
+                    buyer,
+                    count,
                     value: subValue,
                 });
                 this.recordWebSocketHandled(ws, 'in', event.data, giftData, json.event);
@@ -279,7 +309,6 @@ export class Kick extends Seed {
             case 'KicksLeaderboardUpdated':
             case 'App\\Events\\GiftsLeaderboardUpdated':
             case 'App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent':
-            case 'App\\Events\\ChannelSubscriptionEvent':
             case 'App\\Events\\UserBannedEvent':
             case 'App\\Events\\UserUnbannedEvent':
             case 'App\\Events\\PinnedMessageCreatedEvent':
