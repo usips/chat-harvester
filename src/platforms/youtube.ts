@@ -561,7 +561,7 @@ export class YouTube extends Seed {
 
     async onFetchResponse(response: Response): Promise<void> {
         if (response.url.includes('/updated_metadata')) {
-            this._handleUpdatedMetadata(response);
+            await this._handleUpdatedMetadata(response);
             return;
         }
 
