@@ -34,6 +34,11 @@
     "data": "{\"id\":\"ca460f6b-ed98-4373-8564-f9565c6ca55e\",\"channel\":{\"id\":14899489,\"slug\":\"madattheinternet\"},\"user\":{\"id\":44843330,\"slug\":\"atomic-angel\",\"username\":\"Atomic_Angel\"},\"gift\":{\"tier\":1},\"gifted_users\":[{\"id\":27598866,\"slug\":\"judachu\",\"username\":\"Judachu\"}],\"created_at\":\"2026-04-03T16:12:48Z\"}",
     "channel": "channel.14899489"
   },
+  "GiftedSubscriptionsEventUnprefixed": {
+    "event": "GiftedSubscriptionsEvent",
+    "data": "{\"chatroom_id\":14693568,\"gifted_usernames\":[\"FiveExtraChromosomes\",\"DiarrheaVibe\",\"SneedingRacc\",\"TheBomTaker\",\"DancingIsraeli88\"],\"gifter_username\":\"Mr_Homeless\",\"gifted_total\":5,\"gifter_total\":5,\"chunk_details\":null}",
+    "channel": "chatroom_14693568"
+  },
   "SubscriptionEvent": {
     "event": "App\\Events\\SubscriptionEvent",
     "data": "{\"chatroom_id\":2507974,\"username\":\"feepsyy\",\"months\":2}",

@@ -234,7 +234,7 @@ export class Kick extends Seed {
             }
 
             case 'SubscriptionGifted':
-            case 'App\\Events\\ChannelSubscriptionEvent':
+            case 'GiftedSubscriptionsEvent':
             case 'App\\Events\\GiftedSubscriptionsEvent': {
                 const giftData = JSON.parse(json.data as string) as KickGiftedSubsNew | KickGiftedSubsLegacy;
 
@@ -307,8 +307,11 @@ export class Kick extends Seed {
 
             // Ignored events - recorded but intentionally not processed
             case 'KicksLeaderboardUpdated':
+            case 'GiftsLeaderboardUpdated':
             case 'App\\Events\\GiftsLeaderboardUpdated':
             case 'App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent':
+            case 'App\\Events\\ChannelSubscriptionEvent':
+            case 'App\\Events\\ChatMessageSentEvent':
             case 'App\\Events\\UserBannedEvent':
             case 'App\\Events\\UserUnbannedEvent':
             case 'App\\Events\\PinnedMessageCreatedEvent':
@@ -319,6 +322,8 @@ export class Kick extends Seed {
             case 'RewardRedeemedEvent':
             case 'pusher_internal:subscription_succeeded':
             case 'pusher:connection_established':
+            case 'pusher:unsubscribe':
+            case 'pusher:error':
             case 'pusher:pong':
                 this.recordWebSocketIgnored(ws, 'in', event.data, json.event, 'Known event - intentionally ignored');
                 break;

@@ -196,6 +196,35 @@ describe('Kick Platform', () => {
             expect(count).toBe(1);
         });
 
+        it('should parse real unprefixed GiftedSubscriptionsEvent 5-user gift', () => {
+            const event = kickEvents.GiftedSubscriptionsEventUnprefixed;
+            expect(event.event).toBe('GiftedSubscriptionsEvent');
+
+            const data = JSON.parse(event.data);
+
+            let buyer, count;
+            if ('gifter_username' in data) {
+                buyer = data.gifter_username;
+                count = data.gifted_usernames.length;
+            }
+
+            expect(buyer).toBe('Mr_Homeless');
+            expect(count).toBe(5);
+
+            kick.receiveSubscriptions({
+                id: `${Date.now()}_${buyer}`,
+                gifted: true,
+                buyer,
+                count,
+                value: 5,
+            });
+
+            const msg = kick.updateQueue[0].messages[0];
+            expect(msg.username).toBe('Mr_Homeless');
+            expect(msg.amount).toBe(25);
+            expect(msg.message).toBe('Mr_Homeless gifted 5 subscriptions!');
+        });
+
         it('should create subscription message via receiveSubscriptions for new format', () => {
             const event = kickEvents.SubscriptionGifted;
             const data = JSON.parse(event.data);
