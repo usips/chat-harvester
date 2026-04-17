@@ -50,6 +50,9 @@ interface KickDeletedMessage {
 interface KickGiftedSubsLegacy {
     gifter_username: string;
     gifted_usernames: string[];
+    gifted_total?: number;
+    gifter_total?: number;
+    chunk_details?: unknown;
 }
 
 interface KickGiftedSubsNew {
@@ -248,9 +251,11 @@ export class Kick extends Seed {
                     count = giftData.gifted_users.length;
                     id = giftData.id;
                 } else if ('gifter_username' in giftData) {
-                    // Legacy format: { gifter_username, gifted_usernames: string[] }
+                    // Legacy format: { gifter_username, gifted_usernames: string[], gifted_total }
+                    // Prefer gifted_total over array length in case Kick ever truncates
+                    // the usernames list for very large drops.
                     buyer = giftData.gifter_username;
-                    count = giftData.gifted_usernames.length;
+                    count = giftData.gifted_total ?? giftData.gifted_usernames.length;
                     id = `${Date.now()}_${buyer}`;
                 } else {
                     this.warn('Unknown gifted subscription format', giftData);

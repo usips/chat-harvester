@@ -267,6 +267,51 @@ describe('Kick Platform', () => {
             expect(msg.amount).toBe(5); // 5 * 1 gifted
             expect(msg.message).toBe('Atomic_Angel gifted a subscription!');
         });
+
+        it('should announce a 100-sub gift at $500 tier', () => {
+            kick.receiveSubscriptions({
+                id: `${Date.now()}_BigTipper`,
+                gifted: true,
+                buyer: 'BigTipper',
+                count: 100,
+                value: 5,
+            });
+
+            const msg = kick.updateQueue[0].messages[0];
+            expect(msg.username).toBe('BigTipper');
+            expect(msg.amount).toBe(500);
+            expect(msg.currency).toBe('USD');
+            expect(msg.is_subscription).toBe(true);
+            expect(msg.message).toBe('BigTipper gifted 100 subscriptions!');
+        });
+
+        it('should prefer gifted_total over gifted_usernames.length for count', () => {
+            // Hypothetical scenario where Kick truncates the usernames array
+            // for display but keeps gifted_total as the full count.
+            const data = {
+                chatroom_id: 14693568,
+                gifted_usernames: ['user1', 'user2', 'user3'], // truncated
+                gifter_username: 'WhaleSub',
+                gifted_total: 100, // full count
+                gifter_total: 100,
+                chunk_details: null,
+            };
+
+            const count = data.gifted_total ?? data.gifted_usernames.length;
+            expect(count).toBe(100);
+
+            kick.receiveSubscriptions({
+                id: `${Date.now()}_${data.gifter_username}`,
+                gifted: true,
+                buyer: data.gifter_username,
+                count,
+                value: 5,
+            });
+
+            const msg = kick.updateQueue[0].messages[0];
+            expect(msg.amount).toBe(500);
+            expect(msg.message).toBe('WhaleSub gifted 100 subscriptions!');
+        });
     });
 
     describe('KicksGifted event', () => {
