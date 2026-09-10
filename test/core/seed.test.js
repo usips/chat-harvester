@@ -101,6 +101,81 @@ describe('Seed Base Class', () => {
         });
     });
 
+    describe('_safeHook', () => {
+        let seed;
+
+        beforeEach(() => {
+            seed = Object.create(Seed.prototype);
+            seed.platform = 'Test';
+            seed.error = vi.fn();
+            seed.recorder = { record: vi.fn() };
+        });
+
+        it('does not propagate a throwing hook', () => {
+            expect(() => {
+                seed._safeHook('ws_message', () => { throw new Error('platform bug'); });
+            }).not.toThrow();
+
+            expect(seed.recorder.record).toHaveBeenCalledWith(
+                'ws_message', { payload: 'platform bug' }, 'error', null, 'platform bug'
+            );
+        });
+
+        it('does not propagate a rejected async hook', async () => {
+            seed._safeHook('fetch_response', () => Promise.reject(new Error('async bug')));
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(seed.recorder.record).toHaveBeenCalledWith(
+                'fetch_response', { payload: 'async bug' }, 'error', null, 'async bug'
+            );
+        });
+
+        it('survives a missing recorder', () => {
+            seed.recorder = undefined;
+            expect(() => {
+                seed._safeHook('ws_send', () => { throw new Error('boom'); });
+            }).not.toThrow();
+        });
+    });
+
+    describe('WebSocket patch isolation', () => {
+        it('does not let a throwing onWebSocketMessage reach the page', () => {
+            const listeners = {};
+            const sockets = [];
+            const OldSocket = class {
+                constructor(url) {
+                    this.url = url;
+                    sockets.push(this);
+                }
+                addEventListener(type, fn) { listeners[type] = fn; }
+                send() {}
+            };
+
+            const seed = Object.create(Seed.prototype);
+            seed.platform = 'Test';
+            seed.error = vi.fn();
+            seed._debug = vi.fn();
+            seed.recorder = { record: vi.fn() };
+            seed.onWebSocketMessage = () => { throw new Error('platform bug'); };
+            seed.onWebSocketSend = () => { throw new Error('send bug'); };
+
+            const original = window.WebSocket;
+            window.WebSocket = OldSocket;
+            try {
+                const Patched = seed.webSocketPatch();
+                const ws = new Patched('wss://example.com/socket');
+
+                expect(() => listeners.message({ data: 'anything' })).not.toThrow();
+                expect(() => ws.send('anything')).not.toThrow();
+                expect(seed.recorder.record).toHaveBeenCalledTimes(2);
+                expect(sockets).toHaveLength(1);
+            } finally {
+                window.WebSocket = original;
+            }
+        });
+    });
+
     describe('onChatSocketMessage', () => {
         let seed;
 

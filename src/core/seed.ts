@@ -407,6 +407,32 @@ export class Seed {
     }
 
     //
+    // Hook Safety
+    //
+    /**
+     * Run a platform hook so that a bug in it can never propagate into the page's
+     * own socket/fetch/XHR handling. Failures are logged and recorded as errors.
+     */
+    protected _safeHook(type: string, fn: () => unknown): void {
+        const fail = (error: unknown): void => {
+            const reason = (error as Error)?.message ?? String(error);
+            try {
+                this.error(`Hook ${type} threw:`, error);
+            } catch { /* logging must never mask the original failure */ }
+            try {
+                this.recorder?.record(type, { payload: reason }, EventStatus.ERROR, null, reason);
+            } catch { /* recorder is best-effort */ }
+        };
+
+        try {
+            const result = fn();
+            if (result instanceof Promise) result.catch(fail);
+        } catch (error) {
+            fail(error);
+        }
+    }
+
+    //
     // EventSource Patching
     //
     eventSourcePatch(): typeof EventSource {
@@ -418,7 +444,7 @@ export class Seed {
             const es = new oldEventSource(url, config);
 
             es.addEventListener('message', function(event: MessageEvent) {
-                self.onEventSourceMessage(es, event);
+                self._safeHook(EventType.EVENTSOURCE_MESSAGE, () => self.onEventSourceMessage(es, event));
             });
 
             return es;
@@ -450,7 +476,7 @@ export class Seed {
             const response = oldFetch(resource, config);
             response.then((data) => {
                 const newData = data.clone();
-                self.onFetchResponse(newData);
+                self._safeHook(EventType.FETCH_RESPONSE, () => self.onFetchResponse(newData));
                 return data;
             }).catch(() => {
                 // Silently ignore fetch failures (ad blockers, network errors, CORS, etc.)
@@ -496,10 +522,10 @@ export class Seed {
             ws._chuck_url = url.toString(); // Store URL for recording
             const oldWsSend = ws.send.bind(ws);
             ws.send = function(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
-                self.onWebSocketSend(ws, data);
+                self._safeHook(EventType.WS_SEND, () => self.onWebSocketSend(ws, data));
                 return oldWsSend(data);
             } as PatchedWebSocket['send'];
-            ws.addEventListener('message', (event) => self.onWebSocketMessage(ws, event));
+            ws.addEventListener('message', (event) => self._safeHook(EventType.WS_MESSAGE, () => self.onWebSocketMessage(ws, event)));
             ws.send.chuck_patched = true;
             return ws;
         } as unknown as PatchedWebSocketConstructor;
@@ -579,7 +605,7 @@ export class Seed {
             user?: string | null,
             password?: string | null
         ): void {
-            self.onXhrOpen(this, method, url.toString(), async, user ?? undefined, password ?? undefined);
+            self._safeHook(EventType.XHR_OPEN, () => self.onXhrOpen(this, method, url.toString(), async, user ?? undefined, password ?? undefined));
             return oldXhrOpen.call(this, method, url, async, user, password);
         } as PatchedXHROpen;
         newXhrOpen.chuck_patched = true;
@@ -587,7 +613,7 @@ export class Seed {
 
         const oldXhrSend = proto.send;
         const newXhrSend = function(this: XMLHttpRequest, body?: Document | XMLHttpRequestBodyInit | null): void {
-            self.onXhrSend(this, body);
+            self._safeHook(EventType.XHR_SEND, () => self.onXhrSend(this, body));
             return oldXhrSend.call(this, body);
         } as PatchedXHRSend;
         newXhrSend.chuck_patched = true;
