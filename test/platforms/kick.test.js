@@ -1008,3 +1008,110 @@ describe('Fuzzing: Kick robustness', () => {
         );
     });
 });
+
+describe('Kick pinned gifts', () => {
+    // Verbatim response from web.kick.com/api/v1/kicks/57035257/pinned-gifts on 2026-09-10.
+    const pinnedResponse = {
+        data: {
+            pinned_gifts: [{
+                created_at: '2026-09-10T13:22:49.853392469Z',
+                expires_at: '2026-09-10T15:22:49.853392469Z',
+                gift: { amount: 10000, gift_id: 'flex', name: 'Flex', tier: 'HIGHER' },
+                gift_transaction_id: 'e18fd3ca-ff0c-471c-a901-92e314a46b68',
+                message: '',
+                sender: {
+                    id: 58820523,
+                    profile_picture: 'https://files.kick.com/images/user/58820523/profile_image/conversion/4db0677a-3028-4b88-b183-0320aa54bf83-fullsize.webp',
+                    username: 'PNaka',
+                    username_color: '#E26EFF',
+                },
+            }],
+        },
+        message: 'Success',
+    };
+    const liveFrame = gift => JSON.stringify({
+        push: { channel: 'channel_57035257', pub: { data: { event: 'KicksGifted', data: JSON.stringify(gift) } } },
+    });
+
+    it('turns a pinned gift into a KICKS paid message', () => {
+        const kick = makeSpyKick();
+        expect(kick.receivePinnedGifts(pinnedResponse)).toBe(1);
+
+        const [[messages]] = kick.sendChatMessages.mock.calls;
+        expect(messages[0]).toMatchObject({
+            id: 'e18fd3ca-ff0c-471c-a901-92e314a46b68',
+            username: 'PNaka',
+            amount: 10000,
+            currency: 'KICKS',
+            message: 'Sent a Flex!',
+        });
+        expect(messages[0].sent_at).toBe(Date.parse('2026-09-10T13:22:49.853392469Z'));
+    });
+
+    it('sends a gift once across the fetch, the page fetch and the live event', () => {
+        const kick = makeSpyKick();
+        kick.receivePinnedGifts(pinnedResponse);
+        expect(kick.receivePinnedGifts(pinnedResponse)).toBe(0);
+        feed(kick, liveFrame(pinnedResponse.data.pinned_gifts[0]));
+
+        expect(kick.sendChatMessages).toHaveBeenCalledTimes(1);
+        expect(kick.recordWebSocketIgnored).toHaveBeenCalled();
+    });
+
+    it('still sends a live gift that was never pinned', () => {
+        const kick = makeSpyKick();
+        kick.receivePinnedGifts(pinnedResponse);
+        feed(kick, liveFrame({ ...pinnedResponse.data.pinned_gifts[0], gift_transaction_id: 'b5672ba5-f3a9-4102-9211-77376b082e43' }));
+
+        expect(kick.sendChatMessages).toHaveBeenCalledTimes(2);
+    });
+
+    it('tolerates empty and malformed responses', () => {
+        const kick = makeSpyKick();
+        for (const body of [null, 'x', {}, { data: {} }, { data: { pinned_gifts: [] } }, { data: { pinned_gifts: [null, 3] } }, { data: { type: 'Bad Request' } }]) {
+            expect(kick.receivePinnedGifts(body)).toBe(0);
+        }
+        expect(kick.sendChatMessages).not.toHaveBeenCalled();
+    });
+
+    it('fetches pinned gifts by channel id', async () => {
+        const kick = makeSpyKick();
+        kick.channel_id = 57035257;
+        const fetchSpy = vi.fn(() => Promise.resolve({ json: () => Promise.resolve(pinnedResponse) }));
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await kick.fetchPinnedGifts();
+
+        expect(fetchSpy).toHaveBeenCalledWith('https://web.kick.com/api/v1/kicks/57035257/pinned-gifts');
+        expect(kick.sendChatMessages).toHaveBeenCalledTimes(1);
+        vi.unstubAllGlobals();
+    });
+
+    it('swallows a failing pinned-gifts fetch', async () => {
+        const kick = makeSpyKick();
+        kick.channel_id = 1;
+        vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))));
+
+        await expect(kick.fetchPinnedGifts()).resolves.toBeUndefined();
+        expect(kick.error).toHaveBeenCalled();
+        vi.unstubAllGlobals();
+    });
+
+    it('handles the page\'s own pinned-gifts response for this channel only', async () => {
+        const response = url => ({ url, status: 200, clone: () => ({ json: () => Promise.resolve(pinnedResponse) }) });
+
+        const kick = makeSpyKick();
+        kick.channel_id = 57035257;
+        kick.recordFetchHandled = vi.fn();
+        kick.recordFetchIgnored = vi.fn();
+
+        await kick.onFetchResponse(response('https://web.kick.com/api/v1/kicks/99/pinned-gifts'));
+        expect(kick.sendChatMessages).not.toHaveBeenCalled();
+
+        await kick.onFetchResponse(response('https://web.kick.com/api/v1/kicks/57035257/pinned-gifts'));
+        expect(kick.sendChatMessages).toHaveBeenCalledTimes(1);
+        expect(kick.recordFetchHandled).toHaveBeenCalledWith(
+            'https://web.kick.com/api/v1/kicks/57035257/pinned-gifts', 'GET', 200, pinnedResponse, { pinnedGiftsSent: 1 }
+        );
+    });
+});

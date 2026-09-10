@@ -128,6 +128,11 @@ interface KickMessagesResponse {
     data?: { messages?: KickChatMessageData[] };
 }
 
+/** `GET web.kick.com/api/v1/kicks/{channelId}/pinned-gifts`: same gift shape as `KicksGifted`. */
+interface KickPinnedGiftsResponse {
+    data?: { pinned_gifts?: KickKicksGiftedData[] };
+}
+
 interface KickViewersEntry {
     livestream_id?: number;
     viewers?: number;
@@ -320,6 +325,8 @@ export class Kick extends Seed {
     private idsFromRest = false;
     /** Badge types we have already complained about, to keep the console quiet. */
     private unknownBadges = new Set<string>();
+    /** Ids of Kicks gifts already sent; see `markGiftSeen`. Lazily created. */
+    private sentGiftIds?: Set<string>;
 
     constructor() {
         super(Kick.namespace, 'Kick', channelSlugFromPath(window.location.pathname)!);
@@ -519,7 +526,11 @@ export class Kick extends Seed {
                     return { status: 'unhandled', reason: 'Kicks gift payload is not an object' };
                 }
                 const json = data as KickKicksGiftedData;
-                this.sendChatMessages([this.prepareKicksGiftedMessage(json)]);
+                const gift = this.prepareKicksGiftedMessage(json);
+                if (!this.markGiftSeen(gift.id)) {
+                    return { status: 'ignored', reason: 'Kicks gift already sent (pinned-gifts recovery)' };
+                }
+                this.sendChatMessages([gift]);
                 return { status: 'handled', parsed: json };
             }
 
@@ -791,6 +802,9 @@ export class Kick extends Seed {
             return;
         }
 
+        // Independent of the history request: paid gifts sent before the page loaded.
+        void this.fetchPinnedGifts();
+
         try {
             const response = await fetch(`https://kick.com/api/v2/channels/${this.channel_id}/messages`);
             const json = await response.json() as KickMessagesResponse;
@@ -807,6 +821,50 @@ export class Kick extends Seed {
         } catch (error) {
             this.error('Failed to fetch chat history.', error);
         }
+    }
+
+    /**
+     * Recover Kicks gifts sent before the page loaded. The history endpoint carries
+     * only chat, but LEVEL_UP and higher gifts stay pinned for minutes to hours and
+     * Kick serves them from this endpoint; BASIC gifts are never pinned.
+     */
+    async fetchPinnedGifts(): Promise<void> {
+        if (this.channel_id === null) return;
+        try {
+            const response = await fetch(`https://web.kick.com/api/v1/kicks/${this.channel_id}/pinned-gifts`);
+            this.receivePinnedGifts(await response.json());
+        } catch (error) {
+            this.error('Failed to fetch pinned gifts.', error);
+        }
+    }
+
+    /** Send every not-yet-seen pinned gift; returns how many were sent. */
+    receivePinnedGifts(json: unknown): number {
+        const data = isRecord(json) ? (json as KickPinnedGiftsResponse).data : undefined;
+        const gifts = Array.isArray(data?.pinned_gifts) ? data.pinned_gifts : [];
+
+        const messages = gifts
+            .filter(isRecord)
+            .map(gift => this.prepareKicksGiftedMessage(gift as KickKicksGiftedData))
+            .filter(message => this.markGiftSeen(message.id));
+
+        if (messages.length > 0) {
+            this.log(`Recovered ${messages.length} pinned Kicks gift(s).`);
+            this.sendChatMessages(messages);
+        }
+        return messages.length;
+    }
+
+    /**
+     * A gift can reach us up to three times: our own pinned-gifts fetch, the page's
+     * copy of that fetch, and the live `KicksGifted` event. SNEED does not dedupe, so
+     * a paid message must be sent once. Returns false when the id was already sent.
+     */
+    private markGiftSeen(id: string): boolean {
+        this.sentGiftIds ??= new Set<string>();
+        if (this.sentGiftIds.has(id)) return false;
+        this.sentGiftIds.add(id);
+        return true;
     }
 
     //
@@ -907,6 +965,14 @@ export class Kick extends Seed {
                     chatroom_id: this.chatroom_id,
                     livestream_id: this.livestream_id,
                 });
+                return;
+            }
+
+            const pinned = /^\/api\/v1\/kicks\/(\d+)\/pinned-gifts$/.exec(new URL(response.url, 'https://kick.com').pathname);
+            if (pinned !== null && (this.channel_id === null || Number(pinned[1]) === this.channel_id)) {
+                const json = await response.clone().json() as unknown;
+                const sent = this.receivePinnedGifts(json);
+                this.recordFetchHandled(response.url, 'GET', response.status, json, { pinnedGiftsSent: sent });
                 return;
             }
 
