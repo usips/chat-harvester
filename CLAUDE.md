@@ -28,6 +28,10 @@ npm run build:extension:firefox # Firefox only
 npm run watch:userscript        # Watch mode for userscript
 ```
 
+## Headless Smoke Test
+
+`node tools/headless-smoke.mjs <live-url>` launches a headless Brave/Chromium with Violentmonkey (unpacked MV3 build in `~/.cache/chuck-headless/violentmonkey`), installs `dist/chuck.user.js`, opens the page and reports what CHUCK intercepts; run SNEED with `SERVER_IP=127.0.0.2` to see messages arrive. Google Chrome branded builds ignore `--load-extension`, so pass `BROWSER=/usr/bin/brave` or a Chromium. The script handles the "Allow User Scripts" toggle and the Local Network Access permission that Chromium 138+ requires before a page may open `ws://127.0.0.2:1350`.
+
 ## Architecture
 
 **Core flow:** Platform API intercept → Platform scraper → `ChatMessage` → `LivestreamUpdate` → WebSocket → SNEED
