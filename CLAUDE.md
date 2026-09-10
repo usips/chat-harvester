@@ -85,6 +85,7 @@ Platform detection via hostname matching in `src/platforms/index.ts`.
 - **Deterministic IDs**: UUIDv5 with platform-specific namespaces prevents duplicate messages
 - **Debug Recording**: `chuck.startRecording()`, `chuck.downloadRecording()`, `chuck.getRecordingStats()`
 - **X/Twitter CSP**: Blocks outbound WebSocket; requires CSP modifier extension or browser extension version
+- **Kick**: Chat is delivered over Centrifugo (JSON protocol v2) at `wss://realtime.<region>.platform.kick.com/connection/websocket`, negotiated through the realtime descriptor endpoint `POST web.kick.com/api/v1/realtime/channels/{channelId}/chat/connection`. Events arrive as `{"push":{"channel":"chatrooms.<id>.v2","pub":{"data":{"event":"App\\Events\\...","data":"<json string>"}}}}`, may be newline-batched, and `{}` is the heartbeat. Pusher is still a compiled-in fallback provider, so the old `{event,data,channel}` envelope is supported too; `Kick.normalizeFrame` reduces both to `{channel,event,data}` for a single `handleEvent` dispatcher. The presence socket `wss://websockets.kick.com/viewer/v1/connect` is ignored.
 - **Twitch**: IRC parsing incomplete (TODO)
 - **Facebook**: Uses binary MQTT over WebSocket; comment parsing via `live_video_comment_create_subscribe`
 - **Default server**: `ws://127.0.0.2:1350/chat.ws`
