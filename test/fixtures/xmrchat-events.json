@@ -56,5 +56,68 @@
             }
         }
     ],
-    "XmrPriceResponse": "200.00"
+    "XmrPriceResponse": "200.00",
+    "_realNote": "Verbatim from GET https://nest.xmrchat.com/tips/page/monerotalk on 2026-09-11 (public, newest first, amounts in piconero).",
+    "RealTipsPage": [
+        {
+            "id": 7479,
+            "name": "Ruja Ignatova",
+            "message": "I’m amazed that none of the data-center giants have used some of their capacity to launch a 51% attack on XMR. Freedom isn’t free, so turn on your mining machines! I may return next week and say the same. Much love!",
+            "private": false,
+            "createdAt": "2026-09-05T19:01:04.054Z",
+            "expiresAt": "2026-09-05T20:01:04.053Z",
+            "source": null,
+            "payment": {
+                "id": 7873,
+                "pageSlug": null,
+                "amount": "100000000",
+                "paidAmount": "100000000",
+                "createdAt": "2026-09-05T19:01:04.059Z",
+                "paidAt": "2026-09-05T19:01:23.362Z"
+            },
+            "swap": null,
+            "pageTipTier": null,
+            "tipReplies": []
+        },
+        {
+            "id": 7478,
+            "name": "Ruja Ignatova",
+            "message": "A great way to spread awareness of Monero would be to send copies of Zero to Monero to Ugandans who reportedly exchanged goats for OneCoin, helping them learn about privacy-focused cryptocurrency.",
+            "private": false,
+            "createdAt": "2026-09-05T18:30:19.252Z",
+            "expiresAt": "2026-09-05T19:30:19.249Z",
+            "source": null,
+            "payment": {
+                "id": 7872,
+                "pageSlug": null,
+                "amount": "100000000",
+                "paidAmount": "100000000",
+                "createdAt": "2026-09-05T18:30:19.257Z",
+                "paidAt": "2026-09-05T18:30:34.110Z"
+            },
+            "swap": null,
+            "pageTipTier": null,
+            "tipReplies": []
+        },
+        {
+            "id": 6764,
+            "name": "",
+            "message": "",
+            "private": true,
+            "createdAt": "2026-05-30T16:00:25.021Z",
+            "expiresAt": "2026-05-30T17:00:25.021Z",
+            "source": null,
+            "payment": {
+                "id": 7133,
+                "pageSlug": null,
+                "amount": "5000000000",
+                "paidAmount": "5000000000",
+                "createdAt": "2026-05-30T16:00:25.027Z",
+                "paidAt": "2026-05-30T16:00:58.804Z"
+            },
+            "swap": null,
+            "pageTipTier": null,
+            "tipReplies": []
+        }
+    ]
 }

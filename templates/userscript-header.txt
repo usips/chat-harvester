@@ -29,7 +29,7 @@
 // @match https://vk.com/video/lives?z=*
 // @match https://twitter.com/i/broadcasts/*
 // @match https://x.com/i/broadcasts/*
-// @match https://xmrchat.com/streamer
+// @match https://xmrchat.com/*
 // @connect *
 // @grant unsafeWindow
 // @grant GM_getValue
