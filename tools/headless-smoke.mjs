@@ -69,8 +69,15 @@ const prefsPath = `${PROFILE}/Default/Preferences`;
         for (const key of ['local_network_access', 'loopback_network', 'brave_localhost_access']) (ex[key] ??= {})[origin] = { setting: 1 };
         (ex.braveShields ??= {})[origin] = { setting: 2 };
     }
+    // A browser that was killed marks the profile as crashed, and the next launch
+    // restores its tabs. Each restored tab runs CHUCK too and doubles every message
+    // SNEED receives, so always start clean on the New Tab page.
+    prefs.profile.exit_type = 'Normal';
+    prefs.profile.exited_cleanly = true;
+    (prefs.session ??= {}).restore_on_startup = 5;
     fs.writeFileSync(prefsPath, JSON.stringify(prefs));
 }
+fs.rmSync(`${PROFILE}/Default/Sessions`, { recursive: true, force: true });
 
 // ---- serve the userscript so Violentmonkey records a real install URL ----
 const server = http.createServer((req, res) => {
@@ -223,6 +230,13 @@ on(ev => {
 });
 const { targetId: pageTab } = await send('Target.createTarget', { url: 'about:blank' });
 const page = await attach(pageTab);
+{
+    // Belt and braces for the session-restore problem above: only our tab may run CHUCK.
+    const { targetInfos } = await send('Target.getTargets');
+    const stray = targetInfos.filter(t => t.type === 'page' && t.targetId !== pageTab && /^https?:/.test(t.url));
+    for (const t of stray) await send('Target.closeTarget', { targetId: t.targetId }).catch(() => {});
+    if (stray.length > 0) log('closed stray tabs:', stray.map(t => t.url).join(', '));
+}
 await send('Log.enable', {}, page).catch(() => {});
 await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, page);
 log('navigating to', URL_TO_TEST);
@@ -253,4 +267,6 @@ const viewers = top?.viewers ?? frame?.viewers ?? null;
 const messages = (top?.recorded?.chat_message ?? 0) + (frame?.recorded?.chat_message ?? 0);
 const socketOpen = top?.socket === 1 || frame?.socket === 1;
 log('RESULT', JSON.stringify({ injected: !!top || !!frame, viewers, messagesCaptured: messages, backendSocketOpen: socketOpen, consoleLines: chuckLogs.length }));
+// Close cleanly so the profile is not marked as crashed for the next run.
+await send('Browser.close').catch(() => {});
 process.exit(top || frame ? 0 : 4);
