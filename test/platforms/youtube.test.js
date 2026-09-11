@@ -88,6 +88,132 @@ vi.stubGlobal('unsafeWindow', undefined);
 // Import after mocks are set up
 const { ChatMessage } = await import('../../src/core/message.js');
 const { YouTube } = await import('../../src/platforms/youtube.js');
+const { liveStateFromPlayerResponse, viewerCountFromRenderer } = await import('../../src/platforms/youtube.js');
+
+// Verbatim updateViewershipAction payloads from youtubei/v1/updated_metadata, 2026-09-11.
+// QZucLvN3IDs was live; Mxc4L0fgw0s is a regular video.
+const LIVE_METADATA = { actions: [
+    { updateViewershipAction: { viewCount: { videoViewCountRenderer: {
+        viewCount: { simpleText: '16,037 watching now' }, isLive: true,
+        extraShortViewCount: { accessibility: { accessibilityData: { label: '16K' } }, simpleText: '16K' },
+        unlabeledViewCountValue: { simpleText: '16,037' }, originalViewCount: '16037',
+    } } } },
+    { updateDateTextAction: {} },
+] };
+const VIDEO_METADATA = { actions: [
+    { updateViewershipAction: { viewCount: { videoViewCountRenderer: {
+        viewCount: { simpleText: '124 views' }, extraShortViewCount: { simpleText: '124' },
+        unlabeledViewCountValue: { simpleText: '124' }, viewCountLabel: { simpleText: 'Views' }, originalViewCount: '124',
+    } } } },
+    { updateDateTextAction: {} },
+] };
+// Trimmed ytInitialPlayerResponse fields from the same two watch pages.
+const LIVE_PLAYER = { videoDetails: { isLive: true, isLiveContent: true },
+    microformat: { playerMicroformatRenderer: { liveBroadcastDetails: { isLiveNow: true, startTimestamp: '2026-09-11T10:04:42+00:00' } } } };
+const VIDEO_PLAYER = { videoDetails: { isLiveContent: false }, microformat: { playerMicroformatRenderer: {} } };
+const ENDED_PLAYER = { videoDetails: { isLiveContent: true },
+    microformat: { playerMicroformatRenderer: { liveBroadcastDetails: { isLiveNow: false, startTimestamp: '2026-09-10T10:00:00+00:00', endTimestamp: '2026-09-10T12:00:00+00:00' } } } };
+
+describe('YouTube live viewer counts', () => {
+    const metadataResponse = body => ({
+        url: 'https://www.youtube.com/youtubei/v1/updated_metadata?prettyPrint=false',
+        status: 200,
+        json: () => Promise.resolve(body),
+    });
+    const makeYt = (liveState = null) => {
+        const yt = Object.create(YouTube.prototype);
+        Object.assign(yt, {
+            platform: 'YouTube', channel: 'TestChannel', namespace: YouTube.namespace, liveState,
+            log: vi.fn(), warn: vi.fn(), error: vi.fn(), _debug: vi.fn(),
+            sendViewerCount: vi.fn(), recordFetchHandled: vi.fn(), recordFetchIgnored: vi.fn(),
+            recorder: { record: vi.fn() },
+        });
+        return yt;
+    };
+
+    it('reads live state from the player response', () => {
+        expect(liveStateFromPlayerResponse(LIVE_PLAYER)).toBe(true);
+        expect(liveStateFromPlayerResponse(VIDEO_PLAYER)).toBe(false);
+        expect(liveStateFromPlayerResponse(ENDED_PLAYER)).toBe(false);
+        expect(liveStateFromPlayerResponse(undefined)).toBeNull();
+    });
+
+    it('reads counts from every view-count shape', () => {
+        expect(viewerCountFromRenderer({ originalViewCount: '16037', viewCount: { simpleText: '16,037 watching now' } })).toBe(16037);
+        expect(viewerCountFromRenderer({ viewCount: { runs: [{ text: '16,037' }, { text: ' watching now' }] } })).toBe(16037);
+        expect(viewerCountFromRenderer({ viewCount: { simpleText: 'No views' } })).toBeNull();
+        expect(viewerCountFromRenderer({})).toBeNull();
+    });
+
+    it('reports viewers from a live stream\'s metadata poll', async () => {
+        const yt = makeYt();
+        await yt.onFetchResponse(metadataResponse(LIVE_METADATA));
+
+        expect(yt.sendViewerCount).toHaveBeenCalledWith(16037);
+        expect(yt.liveState).toBe(true);
+    });
+
+    it('does not report a video\'s views as viewers', async () => {
+        const yt = makeYt();
+        await yt.onFetchResponse(metadataResponse(VIDEO_METADATA));
+
+        expect(yt.sendViewerCount).not.toHaveBeenCalled();
+        expect(yt.liveState).toBe(false);
+        expect(yt.recordFetchHandled).toHaveBeenCalledWith(
+            expect.any(String), 'POST', 200, VIDEO_METADATA, { actionCount: 2, live: false, viewerCount: null }
+        );
+    });
+
+    it('clears the viewer count once when a live stream ends', async () => {
+        const yt = makeYt();
+        await yt.onFetchResponse(metadataResponse(LIVE_METADATA));
+        await yt.onFetchResponse(metadataResponse(VIDEO_METADATA));
+        await yt.onFetchResponse(metadataResponse(VIDEO_METADATA));
+
+        expect(yt.sendViewerCount.mock.calls).toEqual([[16037], [0]]);
+        expect(yt.liveState).toBe(false);
+    });
+
+    it('only clears the count on unload from a live tab', () => {
+        const video = makeYt(false);
+        video.onBeforeUnload({});
+        expect(video.sendViewerCount).not.toHaveBeenCalled();
+
+        const unknown = makeYt(null);
+        unknown.onBeforeUnload({});
+        expect(unknown.sendViewerCount).not.toHaveBeenCalled();
+
+        const live = makeYt(true);
+        live.onBeforeUnload({});
+        expect(live.sendViewerCount).toHaveBeenCalledWith(0);
+    });
+
+    it('ignores the page\'s view counter unless live', () => {
+        const label = text => ({ getAttribute: () => text, textContent: text });
+        const spy = vi.spyOn(document, 'querySelector');
+        const mutation = [{ type: 'attributes' }];
+        try {
+            spy.mockReturnValue(label('124 views'));
+            const video = makeYt(false);
+            video.onViewCountChange(mutation, null);
+            expect(video.sendViewerCount).not.toHaveBeenCalled();
+
+            spy.mockReturnValue(label('16,037 watching now'));
+            const live = makeYt(true);
+            live.onViewCountChange(mutation, null);
+            expect(live.sendViewerCount).toHaveBeenCalledWith(16037);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it('does not flip to not-live on a page with no player data', () => {
+        const yt = makeYt(true);
+        yt.setLiveState(liveStateFromPlayerResponse(undefined), 'page');
+        expect(yt.liveState).toBe(true);
+        expect(yt.sendViewerCount).not.toHaveBeenCalled();
+    });
+});
 
 describe('YouTube Platform', () => {
     describe('prepareChatMessages', () => {

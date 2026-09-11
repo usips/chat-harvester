@@ -15,6 +15,34 @@ import { Seed, ChatMessage, uuidv5, WINDOW, EventStatus } from '../core/index.js
 
 interface YTWindow extends Window {
     ytInitialData?: YTInitialData;
+    ytInitialPlayerResponse?: YTPlayerResponse;
+}
+
+/** The fields of `ytInitialPlayerResponse` that say whether a video is live right now. */
+interface YTPlayerResponse {
+    videoDetails?: {
+        isLive?: boolean;
+        isLiveContent?: boolean;
+    };
+    microformat?: {
+        playerMicroformatRenderer?: {
+            liveBroadcastDetails?: {
+                isLiveNow?: boolean;
+            };
+        };
+    };
+}
+
+/** YouTube's view-count block, shared by the watch page and `updated_metadata`. */
+interface YTViewCountRenderer {
+    viewCount?: {
+        simpleText?: string;
+        runs?: { text?: string }[];
+    };
+    /** Present and true only while a stream is live; absent on videos and ended streams. */
+    isLive?: boolean;
+    /** The count as a plain number string, e.g. "16037". */
+    originalViewCount?: string;
 }
 
 interface YTInitialData {
@@ -158,14 +186,32 @@ interface YTUpdatedMetadataResponse {
     actions?: {
         updateViewershipAction?: {
             viewCount?: {
-                videoViewCountRenderer?: {
-                    viewCount?: {
-                        simpleText?: string;
-                    };
-                };
+                videoViewCountRenderer?: YTViewCountRenderer;
             };
         };
     }[];
+}
+
+/**
+ * Whether the page's video is live now: true for a live stream, false for a regular
+ * video or a finished stream, null when the player data is unavailable.
+ */
+export function liveStateFromPlayerResponse(playerResponse: YTPlayerResponse | undefined): boolean | null {
+    if (!playerResponse?.videoDetails) return null;
+    return playerResponse.videoDetails.isLive === true
+        || playerResponse.microformat?.playerMicroformatRenderer?.liveBroadcastDetails?.isLiveNow === true;
+}
+
+/** Number in a view-count block ("16,037 watching now", runs, or originalViewCount). */
+export function viewerCountFromRenderer(renderer: YTViewCountRenderer): number | null {
+    const raw = renderer.originalViewCount
+        ?? renderer.viewCount?.simpleText
+        ?? renderer.viewCount?.runs?.map(run => run.text ?? '').join('')
+        ?? '';
+    const digits = raw.replace(/[^\d]/g, '');
+    if (digits.length === 0) return null;
+    const count = parseInt(digits, 10);
+    return Number.isFinite(count) ? count : null;
 }
 
 interface YTOembedResponse {
@@ -178,6 +224,34 @@ export class YouTube extends Seed {
     static namespace = 'fd60ac36-d6b5-49dc-aee6-b0d87d130582';
 
     private _cssInjected = false;
+
+    /**
+     * Whether this tab's video is live: null until known. A regular video's "views"
+     * must never be reported as live viewers, and SNEED keeps one viewer count per
+     * platform, so only a live tab may send or clear YouTube's count.
+     */
+    liveState: boolean | null = null;
+
+    /** Record a live-state change; a stream that ends in this tab clears SNEED's count once. */
+    setLiveState(live: boolean | null, source: string): void {
+        if (live === null || live === this.liveState) return;
+
+        const wasLive = this.liveState === true;
+        this.liveState = live;
+        this.log(`Live state from ${source}: ${live ? 'live' : 'not live'}.`);
+
+        if (wasLive && !live) {
+            this.log('Stream ended; clearing the viewer count.');
+            this.sendViewerCount(0);
+        }
+    }
+
+    onBeforeUnload(_event: BeforeUnloadEvent): void {
+        // Closing a video tab must not zero the count of a live YouTube tab.
+        if (this.liveState === true) {
+            this.sendViewerCount(0);
+        }
+    }
 
     constructor() {
         // Extract video ID from URL immediately to use as channel
@@ -503,6 +577,10 @@ export class YouTube extends Seed {
 
         this.log('Video ID:', video_id, 'Chat only:', is_chat_only);
 
+        if (!is_chat_only) {
+            this.setLiveState(liveStateFromPlayerResponse((WINDOW as YTWindow).ytInitialPlayerResponse), 'page');
+        }
+
         let author_url: string | null = null;
         try {
             const oembedResponse = await fetch(`https://www.youtube.com/oembed?url=http%3A//youtube.com/watch%3Fv%3D${video_id}&format=json`);
@@ -632,28 +710,26 @@ export class YouTube extends Seed {
             }
 
             let viewerCount: number | null = null;
-            for (const action of actions) {
-                if (action.updateViewershipAction) {
-                    const viewCountText = action.updateViewershipAction
-                        ?.viewCount?.videoViewCountRenderer?.viewCount?.simpleText;
+            let live: boolean | null = null;
+            const renderer = actions
+                .find(action => action.updateViewershipAction)
+                ?.updateViewershipAction?.viewCount?.videoViewCountRenderer;
 
-                    if (viewCountText) {
-                        // Parse "31,946 watching now" -> 31946
-                        const numericOnly = viewCountText.replace(/[^\d]/g, '');
-                        if (numericOnly) {
-                            viewerCount = parseInt(numericOnly, 10);
-                            if (!isNaN(viewerCount)) {
-                                this.sendViewerCount(viewerCount);
-                            }
-                        }
-                    }
-                    break;
+            if (renderer) {
+                // Only a live stream carries isLive; a video or a finished stream
+                // reports its total views, which are not viewers.
+                live = renderer.isLive === true;
+                this.setLiveState(live, 'updated_metadata');
+                if (live) {
+                    viewerCount = viewerCountFromRenderer(renderer);
+                    if (viewerCount !== null) this.sendViewerCount(viewerCount);
                 }
             }
 
             this.recordFetchHandled(response.url, 'POST', response.status, json, {
                 actionCount: actions.length,
-                viewerCount: viewerCount
+                live,
+                viewerCount,
             });
         } catch (error) {
             this.warn('Failed to process updated_metadata response:', error);
@@ -667,6 +743,9 @@ export class YouTube extends Seed {
     }
 
     onViewCountChange(mutationsList: MutationRecord[], _observer: MutationObserver): void {
+        // On a video or a finished stream this label is the total view count.
+        if (this.liveState !== true) return;
+
         for (const mutation of mutationsList) {
             if (mutation.type === 'childList' || mutation.type === 'characterData' || mutation.type === 'attributes') {
                 const viewCountElem = document.querySelector('#view-count');
