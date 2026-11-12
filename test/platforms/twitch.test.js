@@ -3,13 +3,13 @@
  * Tests for Twitch IRC-over-WebSocket message parsing
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fc from 'fast-check';
 import twitchEvents from '../fixtures/twitch-events.json';
 
 // Mock browser globals before importing Twitch
 vi.stubGlobal('window', {
-    location: { href: 'https://twitch.tv/streamerchannel' },
+    location: { href: 'https://www.twitch.tv/streamerchannel', pathname: '/streamerchannel' },
     WebSocket: class MockWebSocket {
         static OPEN = 1;
         static oldWebSocket = class { };
@@ -31,7 +31,8 @@ vi.stubGlobal('unsafeWindow', undefined);
 
 // Import after mocks are set up
 const { ChatMessage } = await import('../../src/core/message.js');
-const { Twitch } = await import('../../src/platforms/twitch.js');
+const { uuidv5 } = await import('../../src/core/uuid.js');
+const { Twitch, channelFromPath, SUB_PRICE_USD } = await import('../../src/platforms/twitch.js');
 
 describe('Twitch Platform', () => {
     describe('Static properties', () => {
@@ -112,13 +113,6 @@ describe('Twitch Platform', () => {
             expect(parsed.prefix).toBe('testuser!testuser@testuser.tmi.twitch.tv');
             expect(Object.keys(parsed.tags)).toHaveLength(0);
         });
-
-        it('should maintain backwards compatibility with meta property', () => {
-            const parsed = twitch.parseIrcMessageToJson(twitchEvents.PrivMsg);
-
-            expect(parsed.meta).toBe(parsed.tags);
-            expect(parsed.meta['display-name']).toBe('TestUser');
-        });
     });
 
     describe('extractUsername', () => {
@@ -163,41 +157,6 @@ describe('Twitch Platform', () => {
         it('should handle empty badges', () => {
             expect(twitch.hasBadge('', 'broadcaster')).toBe(false);
             expect(twitch.hasBadge(null, 'broadcaster')).toBe(false);
-        });
-    });
-
-    describe('updateChannelFromParams', () => {
-        let twitch;
-
-        beforeEach(() => {
-            twitch = Object.create(Twitch.prototype);
-            twitch.channel = 'oldchannel';
-            twitch.log = vi.fn();
-        });
-
-        it('should update channel from IRC params', () => {
-            twitch.updateChannelFromParams(['#newchannel']);
-            expect(twitch.channel).toBe('newchannel');
-            expect(twitch.log).toHaveBeenCalledWith('Channel changed: oldchannel → newchannel');
-        });
-
-        it('should not update if channel is the same', () => {
-            twitch.updateChannelFromParams(['#oldchannel']);
-            expect(twitch.channel).toBe('oldchannel');
-            expect(twitch.log).not.toHaveBeenCalled();
-        });
-
-        it('should handle empty params', () => {
-            twitch.updateChannelFromParams([]);
-            expect(twitch.channel).toBe('oldchannel');
-
-            twitch.updateChannelFromParams(null);
-            expect(twitch.channel).toBe('oldchannel');
-        });
-
-        it('should handle params without # prefix', () => {
-            twitch.updateChannelFromParams(['nochannel']);
-            expect(twitch.channel).toBe('oldchannel');
         });
     });
 
@@ -254,7 +213,7 @@ describe('Twitch Platform', () => {
             const message = twitch.prepareChatMessage(parsed);
 
             expect(message).toBeInstanceOf(ChatMessage);
-            expect(message.id).toBe('abc123-def456');
+            expect(message.id).toBe(uuidv5('abc123-def456', Twitch.namespace));
             expect(message.username).toBe('TestUser');
             expect(message.message).toBe('Hello chat!');
             expect(message.is_sub).toBe(true);
@@ -489,6 +448,414 @@ describe('Twitch Platform', () => {
                 ),
                 { numRuns: 100 }
             );
+        });
+    });
+
+    describe('channelFromPath', () => {
+        it('reads the login from channel, popout, embed and moderator paths', () => {
+            expect(channelFromPath('/hasanabi')).toBe('hasanabi');
+            expect(channelFromPath('/HasanAbi/')).toBe('hasanabi');
+            expect(channelFromPath('/popout/hasanabi/chat')).toBe('hasanabi');
+            expect(channelFromPath('/embed/hasanabi/chat')).toBe('hasanabi');
+            expect(channelFromPath('/moderator/hasanabi')).toBe('hasanabi');
+        });
+
+        it('returns null for pages without a live chat', () => {
+            for (const path of ['/', '/directory', '/directory/category/just-chatting', '/settings/profile',
+                '/videos/2345678901', '/hasanabi/videos', '/hasanabi/clip/SomeClip', '/p/en/legal/terms',
+                '/popout/hasanabi/poll', '/search', '/not-a-login!']) {
+                expect(channelFromPath(path)).toBeNull();
+            }
+        });
+    });
+
+    describe('Live payloads (2026-11)', () => {
+        const live = twitchEvents.live;
+        let twitch;
+
+        /** A Twitch scraper on `login` that records what it would send. */
+        function makeTwitch(login) {
+            window.location.pathname = `/${login}`;
+            const t = Object.create(Twitch.prototype);
+            t.platform = 'Twitch';
+            t.channel = login;
+            t.channelId = null;
+            t.viewers = null;
+            t.hermesViewers = null;
+            t.namespace = Twitch.namespace;
+            t.chatSocket = null;
+            t.log = vi.fn();
+            t.warn = vi.fn();
+            t.error = vi.fn();
+            t.sent = [];
+            t.removed = [];
+            t.counts = [];
+            t.sendChatMessages = vi.fn((messages) => t.sent.push(...messages));
+            t.sendRemoveMessages = vi.fn((ids) => t.removed.push(...ids));
+            t.sendViewerCount = vi.fn((count) => { t.viewers = count; t.counts.push(count); });
+            t.pollViewers = vi.fn(() => Promise.resolve());
+            t.recordWebSocketHandled = vi.fn();
+            t.recordWebSocketIgnored = vi.fn();
+            return t;
+        }
+
+        function feed(t, line) {
+            return t.handleIrcCommand(t.parseIrcMessageToJson(line));
+        }
+
+        afterEach(() => {
+            window.location.pathname = '/streamerchannel';
+        });
+
+        describe('chat messages', () => {
+            beforeEach(() => {
+                twitch = makeTwitch('zackrawrr');
+            });
+
+            it('uses a uuidv5 of the Twitch message id', () => {
+                feed(twitch, live.HighlightedMessage);
+                expect(twitch.sent).toHaveLength(1);
+                expect(twitch.sent[0].id).toBe(uuidv5('a306431b-932c-4f99-a46f-7858b9535664', Twitch.namespace));
+                expect(twitch.sent[0].username).toBe('GutsyGrim');
+                expect(twitch.sent[0].sent_at).toBe(1794513008099);
+            });
+
+            it('keeps the text of a reply and learns the room id', () => {
+                feed(twitch, live.Reply);
+                expect(twitch.sent[0].message).toBe('@cm_punk90 yes he stepped down');
+                expect(twitch.channelId).toBe('552120296');
+            });
+
+            it('maps v1 and emotesv2 ids to CDN urls', () => {
+                feed(twitch, live.EmotesV2);
+                const emojis = twitch.sent[0].emojis;
+                expect(emojis.map(e => e[0])).toEqual(['LUL', 'LUL', 'assmondUp']);
+                expect(emojis[0][1]).toBe('https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0');
+                expect(emojis[2][1]).toBe('https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_8ffb8ed8bf784d828fd9405d622207e6/default/dark/1.0');
+            });
+
+            it('counts emote positions in code points, not UTF-16 units', () => {
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.EmoteAfterEmoji);
+                feed(twitch, live.EmoteAfterFlag);
+                expect(twitch.sent[0].emojis.map(e => e[0])).toEqual(['LUL', 'hasFlex', 'hasFlex', 'hasFlex', 'hasFlex']);
+                expect(twitch.sent[1].emojis.map(e => e[0])).toEqual(['hasRight', 'hasLeft']);
+            });
+
+            it('flags a bot moderator', () => {
+                feed(twitch, live.BotModerator);
+                expect(twitch.sent[0].is_mod).toBe(true);
+                expect(twitch.sent[0].is_sub).toBe(true);
+                expect(twitch.sent[0].username).toBe('Fossabot');
+            });
+
+            it('unwraps /me actions, keeping emote positions', () => {
+                twitch = makeTwitch('sodapoppin');
+                feed(twitch, live.Action);
+                expect(twitch.sent[0].message).toBe('licks his knife');
+
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.ActionWithEmotes);
+                expect(twitch.sent[0].message).toBe('BegWan yoteSip dviperUp ffoxesSip nukkSnug');
+                expect(twitch.sent[0].emojis.map(e => e[0])).toEqual(['BegWan', 'yoteSip', 'dviperUp', 'ffoxesSip', 'nukkSnug']);
+            });
+
+            it('values cheers at one cent per bit', () => {
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.Cheer);
+                expect(twitch.sent[0].amount).toBe(1);
+                expect(twitch.sent[0].currency).toBe('USD');
+
+                twitch = makeTwitch('jynxzi');
+                feed(twitch, live.CheerWithText);
+                expect(twitch.sent[0].amount).toBe(0.2);
+                expect(twitch.sent[0].message).toBe('Cheer20 When will Mike and Ronnie return also you should play plague Inc and Planet zoo 2');
+            });
+
+            it('keeps shared-chat messages but not a partner channel\'s bits', () => {
+                twitch = makeTwitch('qtcinderella');
+                feed(twitch, live.SharedChatMessage);
+                expect(twitch.sent).toHaveLength(1);
+
+                const partnerCheer = live.Cheer
+                    .replace('room-id=207813352', 'room-id=207813352;source-room-id=1526864365');
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, partnerCheer);
+                expect(twitch.sent[0].amount).toBe(0);
+            });
+
+            it('ignores lines for another channel', () => {
+                twitch = makeTwitch('hasanabi');
+                expect(feed(twitch, live.Reply).status).toBe('ignored');
+                expect(twitch.sent).toHaveLength(0);
+            });
+
+            it('ignores connection and state lines', () => {
+                twitch = makeTwitch('sodapoppin');
+                for (const line of [live.Join, live.Names, live.EndOfNames, twitchEvents.Ping]) {
+                    expect(feed(twitch, line).status).toBe('ignored');
+                }
+                feed(twitch, live.RoomState);
+                expect(twitch.channelId).toBe('26301881');
+            });
+        });
+
+        describe('subscriptions and notices', () => {
+            it('values a new Tier 1 sub at one month', () => {
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.Sub);
+                const [message] = twitch.sent;
+                expect(message.is_subscription).toBe(true);
+                expect(message.amount).toBe(SUB_PRICE_USD['1000']);
+                expect(message.currency).toBe('USD');
+                expect(message.username).toBe('kylomellnuzzo');
+                expect(message.message).toBe('kylomellnuzzo subscribed at Tier 1.');
+                expect(message.id).toBe(uuidv5('947c2d0c-8ed1-42bd-8390-78050103d566', Twitch.namespace));
+            });
+
+            it('appends the user\'s resub message and its emotes', () => {
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.ResubPrime);
+                const [message] = twitch.sent;
+                expect(message.amount).toBe(SUB_PRICE_USD.Prime);
+                expect(message.message).toBe("Erigel subscribed with Prime. They've subscribed for 41 months, currently on a 24 month streak! hasRaid hasRaid hasRaid hasRaid hasRaid");
+                expect(message.emojis).toHaveLength(5);
+                expect(message.emojis[0][0]).toBe('hasRaid');
+            });
+
+            it('values a monthly notice of a prepaid multi-month sub at one month', () => {
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.ResubMultiMonthTenure);
+                expect(twitch.sent[0].amount).toBe(SUB_PRICE_USD['1000']);
+            });
+
+            it('values a new prepaid multi-month sub at its full duration', () => {
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.ResubMultiMonthTenure.replace('msg-param-multimonth-tenure=3', 'msg-param-multimonth-tenure=0'));
+                expect(twitch.sent[0].amount).toBeCloseTo(SUB_PRICE_USD['1000'] * 6, 2);
+            });
+
+            it('counts a mystery gift once, not again per recipient', () => {
+                twitch = makeTwitch('stableronaldo');
+                feed(twitch, live.SubMysteryGift);
+                expect(feed(twitch, live.SubGiftFromMystery).status).toBe('ignored');
+                expect(twitch.sent).toHaveLength(1);
+                expect(twitch.sent[0].is_subscription).toBe(true);
+                expect(twitch.sent[0].amount).toBe(SUB_PRICE_USD['1000']);
+                expect(twitch.sent[0].username).toBe('ghtzzi');
+            });
+
+            it('counts a mass gift by its gift count', () => {
+                twitch = makeTwitch('stableronaldo');
+                feed(twitch, live.SubMysteryGift.replace('msg-param-mass-gift-count=1', 'msg-param-mass-gift-count=10'));
+                expect(twitch.sent[0].amount).toBeCloseTo(SUB_PRICE_USD['1000'] * 10, 2);
+            });
+
+            it('counts a direct gift whose mystery notice was not seen', () => {
+                twitch = makeTwitch('stableronaldo');
+                feed(twitch, live.SubGiftFromMystery);
+                expect(twitch.sent).toHaveLength(1);
+                expect(twitch.sent[0].message).toBe('ghtzzi gifted a Tier 1 sub to itsboogie!');
+                expect(twitch.sent[0].amount).toBe(SUB_PRICE_USD['1000']);
+            });
+
+            it('skips another channel\'s gifts shown in a shared chat', () => {
+                twitch = makeTwitch('qtcinderella');
+                expect(feed(twitch, live.SharedChatMysteryGift).status).toBe('ignored');
+                expect(twitch.sent).toHaveLength(0);
+            });
+
+            it('shows raids and announcements as plain messages', () => {
+                twitch = makeTwitch('hasanabi');
+                feed(twitch, live.Raid);
+                feed(twitch, live.Announcement);
+                expect(twitch.sent[0].message).toBe('33 raiders from HasanAbi_Waiting_Room_ have joined!');
+                expect(twitch.sent[0].is_subscription).toBe(false);
+                expect(twitch.sent[0].amount).toBe(0);
+                expect(twitch.sent[1].username).toBe('Fossabot');
+                expect(twitch.sent[1].is_mod).toBe(true);
+                expect(twitch.sent[1].message).toMatch(/^Confused why people/);
+            });
+
+            it('shows a watch streak only with the user\'s message', () => {
+                twitch = makeTwitch('zackrawrr');
+                feed(twitch, live.ViewerMilestone);
+                expect(twitch.sent[0].message).toBe('Lets go');
+                expect(feed(twitch, live.ViewerMilestone.replace(' :Lets go', '')).status).toBe('ignored');
+            });
+        });
+
+        describe('removals', () => {
+            it('removes a deleted message by its uuid', () => {
+                twitch = makeTwitch('realkatieb');
+                feed(twitch, live.ClearMsg);
+                expect(twitch.removed).toEqual([uuidv5('38672ce6-33d9-4680-892a-80e309f5e9ea', Twitch.namespace)]);
+            });
+
+            it('removes what a timed-out user sent, and only theirs', () => {
+                twitch = makeTwitch('zackrawrr');
+                const victim = live.HighlightedMessage.replace('user-id=43375955', 'user-id=1424313863');
+                feed(twitch, victim);
+                feed(twitch, live.Reply);
+                feed(twitch, live.ClearChatTimeout);
+                expect(twitch.removed).toEqual([uuidv5('a306431b-932c-4f99-a46f-7858b9535664', Twitch.namespace)]);
+
+                // Nothing left to remove a second time.
+                expect(feed(twitch, live.ClearChatTimeout).status).toBe('ignored');
+            });
+
+            it('removes everything sent on a full chat clear', () => {
+                twitch = makeTwitch('zackrawrr');
+                feed(twitch, live.HighlightedMessage);
+                feed(twitch, live.Reply);
+                feed(twitch, '@room-id=552120296;tmi-sent-ts=1794513000000 :tmi.twitch.tv CLEARCHAT #zackrawrr');
+                expect(twitch.removed).toHaveLength(2);
+            });
+
+            it('bounds the per-user id map', () => {
+                twitch = makeTwitch('zackrawrr');
+                for (let i = 0; i < 2100; i++) {
+                    feed(twitch, live.Reply.replace('user-id=984484139', `user-id=${i}`).replace('id=f91a0430', `id=${i}-f91a0430`));
+                }
+                expect(twitch.sentByUser.size).toBe(2000);
+                expect(twitch.sentByUser.has('0')).toBe(false);
+            });
+        });
+
+        describe('viewer counts', () => {
+            function hermesFeed(t, frame) {
+                t.processHermesMessage({ url: 'wss://hermes.twitch.tv/v1?clientId=x' }, frame);
+            }
+
+            beforeEach(() => {
+                twitch = makeTwitch('sodapoppin');
+                twitch.recordWebSocketHandled = vi.fn();
+                twitch.recordWebSocketIgnored = vi.fn();
+            });
+
+            it('accepts a viewcount for the subscribed playback topic of this channel', () => {
+                twitch.channelId = '26301881';
+                twitch.learnHermesFrame(live.HermesSubscribePlayback);
+                hermesFeed(twitch, live.HermesViewcount);
+                expect(twitch.counts).toEqual([18018]);
+            });
+
+            it('ignores a viewcount for another channel\'s topic', () => {
+                twitch.channelId = '26301881';
+                twitch.learnHermesFrame(live.HermesSubscribePlayback.replace('video-playback-by-id.26301881', 'video-playback-by-id.552120296'));
+                hermesFeed(twitch, live.HermesViewcount);
+                // An unknown subscription (here: the previous channel's) is not ours either.
+                hermesFeed(twitch, live.HermesViewcountZackrawrr);
+                expect(twitch.counts).toEqual([]);
+            });
+
+            it('forgets unsubscribed topics', () => {
+                twitch = makeTwitch('zackrawrr');
+                twitch.recordWebSocketIgnored = vi.fn();
+                twitch.channelId = '552120296';
+                twitch.learnHermesFrame(JSON.stringify({ type: 'subscribe', id: 'a', subscribe: { id: 'q02fML4InfI7DcjvwqmOD', type: 'pubsub', pubsub: { topic: 'video-playback-by-id.552120296' } } }));
+                twitch.learnHermesFrame(live.HermesUnsubscribe);
+                hermesFeed(twitch, live.HermesViewcountZackrawrr);
+                expect(twitch.counts).toEqual([]);
+            });
+
+            it('sends 0 when the stream goes down', () => {
+                twitch.channelId = '26301881';
+                twitch.learnHermesFrame(live.HermesSubscribePlayback);
+                hermesFeed(twitch, JSON.stringify({ type: 'notification', notification: { subscription: { id: 'beCyAmH-VOpXGw2TT9FyO' }, type: 'pubsub', pubsub: '{"type":"stream-down","server_time":1794513300}' } }));
+                expect(twitch.counts).toEqual([0]);
+            });
+
+            it('treats control frames as ignored', () => {
+                hermesFeed(twitch, live.HermesUnsubscribeResponse);
+                expect(twitch.counts).toEqual([]);
+                expect(twitch.recordWebSocketIgnored).toHaveBeenCalled();
+            });
+
+            it('reports GQL\'s count when Hermes is quiet, and learns the channel id', () => {
+                const user = { id: '26301881', login: 'sodapoppin', stream: { id: '322202520409', type: 'live', viewersCount: 15938 } };
+                expect(twitch.receiveStreamInfo('sodapoppin', user)).toBe(15938);
+                expect(twitch.channelId).toBe('26301881');
+            });
+
+            it('re-sends the fresher Hermes count on a GQL poll', () => {
+                twitch.channelId = '26301881';
+                twitch.learnHermesFrame(live.HermesSubscribePlayback);
+                hermesFeed(twitch, live.HermesViewcount);
+                const user = { id: '26301881', login: 'sodapoppin', stream: { id: '1', type: 'live', viewersCount: 15938 } };
+                twitch.receiveStreamInfo('sodapoppin', user);
+                expect(twitch.counts).toEqual([18018, 18018]);
+            });
+
+            it('sends 0 once for an offline channel', () => {
+                const user = { id: '71092938', login: 'sodapoppin', stream: null };
+                twitch.receiveStreamInfo('sodapoppin', user);
+                twitch.receiveStreamInfo('sodapoppin', user);
+                expect(twitch.counts).toEqual([0]);
+            });
+
+            it('ignores GQL answers about another channel or a missing user', () => {
+                expect(twitch.receiveStreamInfo('sodapoppin', { id: '1', login: 'xqc', stream: { viewersCount: 5 } })).toBeNull();
+                expect(twitch.receiveStreamInfo('xqc', { id: '1', login: 'xqc', stream: { viewersCount: 5 } })).toBeNull();
+                expect(twitch.receiveStreamInfo('sodapoppin', null)).toBeNull();
+                expect(twitch.counts).toEqual([]);
+            });
+
+            it('polls GQL with the unpatched fetch and the web Client-ID', async () => {
+                const fetchSpy = vi.fn(() => Promise.resolve({
+                    json: () => Promise.resolve({ data: { user: { id: '26301881', login: 'sodapoppin', stream: { id: '1', type: 'live', viewersCount: 777 } } } }),
+                }));
+                window.fetch.oldFetch = fetchSpy;
+                try {
+                    await Twitch.prototype.pollViewers.call(twitch);
+                } finally {
+                    delete window.fetch.oldFetch;
+                }
+                expect(fetchSpy).toHaveBeenCalledTimes(1);
+                const [url, init] = fetchSpy.mock.calls[0];
+                expect(url).toBe('https://gql.twitch.tv/gql');
+                expect(init.headers['Client-ID']).toBe('kimne78kx3ncx6brgo4mv6wki5h1ko');
+                expect(JSON.parse(init.body).variables).toEqual({ login: 'sodapoppin' });
+                expect(twitch.counts).toEqual([777]);
+            });
+
+            it('reads the stream record out of the page\'s own GQL answers', async () => {
+                twitch.recordFetchHandled = vi.fn();
+                twitch.recordFetchIgnored = vi.fn();
+                const body = [{ data: { user: { id: '26301881', login: 'sodapoppin', stream: { id: '1', viewersCount: 16001 } } } },
+                    { data: { sideNav: { sections: [{ content: { edges: [{ node: { broadcaster: { login: 'sodapoppin' }, viewersCount: 1 } }] } }] } } }];
+                await twitch.onFetchResponse({ url: 'https://gql.twitch.tv/gql', status: 200, json: () => Promise.resolve(body) });
+                expect(twitch.counts).toEqual([16001]);
+            });
+        });
+
+        describe('navigation', () => {
+            it('switches channel when the address bar changes, zeroing the old count', () => {
+                twitch = makeTwitch('zackrawrr');
+                twitch.setChannel = vi.fn((c) => { twitch.channel = c; });
+                twitch.chatSocket = { readyState: 1 };
+                twitch.viewers = 42478;
+                twitch.channelId = '552120296';
+                window.location.pathname = '/sodapoppin';
+
+                twitch.onWebSocketSend({ url: 'wss://irc-ws.chat.twitch.tv/' }, 'JOIN #sodapoppin');
+
+                expect(twitch.counts).toEqual([0]);
+                expect(twitch.channel).toBe('sodapoppin');
+                expect(twitch.channelId).toBeNull();
+                expect(twitch.viewers).toBeNull();
+                expect(twitch.pollViewers).toHaveBeenCalled();
+            });
+
+            it('stops scraping on a page without chat', async () => {
+                twitch = makeTwitch('zackrawrr');
+                window.location.pathname = '/directory';
+                // The next poll notices the page change before it would fetch.
+                await Twitch.prototype.pollViewers.call(twitch);
+                expect(feed(twitch, live.Reply).status).toBe('ignored');
+                expect(twitch.channel).toBeNull();
+                expect(twitch.sent).toHaveLength(0);
+            });
         });
     });
 
