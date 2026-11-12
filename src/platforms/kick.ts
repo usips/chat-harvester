@@ -80,6 +80,8 @@ interface KickKicksGiftedData {
     gift_transaction_id?: string;
     message?: string;
     created_at?: string;
+    /** Pinned gifts only: created_at + 2 h for HIGHER tier, + 10 min for MID. */
+    expires_at?: string;
     sender?: KickSender;
     gift?: KickGift;
 }
@@ -248,7 +250,14 @@ const SUBSCRIPTION_VALUE_USD = 5;
 /** Kicks are platform currency; SNEED converts at 0.01 USD/Kick. */
 const KICKS_CURRENCY = 'KICKS';
 
-const EMOTE_PATTERN = /\[emote:(\d+):([^\]]+)\]/g;
+/** How long a sent gift is remembered without `expires_at`; the longest pin is 2 h. */
+const GIFT_MEMORY_MS = 2 * 60 * 60 * 1000;
+/** Floor on a remembered gift's lifetime, absorbing clock skew against `expires_at`. */
+const GIFT_MEMORY_MIN_MS = 10 * 60 * 1000;
+/** sessionStorage key prefix for sent gift ids, followed by the channel slug. */
+const SENT_GIFTS_KEY = 'chuck:kick:sent-gifts:';
+
+const EMOTE_PATTERN =/\[emote:(\d+):([^\]]+)\]/g;
 /** RFC 9562 versions 1-8: livestream ids are UUIDv7. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -286,6 +295,26 @@ function parseTimestamp(value: unknown): number {
         if (!Number.isNaN(parsed)) return parsed;
     }
     return Date.now();
+}
+
+/** When a sent gift can be forgotten: once Kick has stopped serving it as pinned. */
+function giftExpiry(gift: KickKicksGiftedData | null): number {
+    const now = Date.now();
+    let expiry = typeof gift?.expires_at === 'string' ? Date.parse(gift.expires_at) : NaN;
+    if (Number.isNaN(expiry) && typeof gift?.created_at === 'string') {
+        expiry = Date.parse(gift.created_at) + GIFT_MEMORY_MS;
+    }
+    if (Number.isNaN(expiry)) expiry = now + GIFT_MEMORY_MS;
+    return Math.max(expiry, now + GIFT_MEMORY_MIN_MS);
+}
+
+/** The page's sessionStorage, or null where it is missing or blocked. */
+function sessionStore(): Storage | null {
+    try {
+        return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+    } catch {
+        return null;
+    }
 }
 
 /** `metadata` is an object on the socket and a JSON string over REST. */
@@ -350,8 +379,10 @@ export class Kick extends Seed {
     private idsFromRest = false;
     /** Badge types we have already complained about, to keep the console quiet. */
     private unknownBadges = new Set<string>();
-    /** Ids of Kicks gifts already sent; see `markGiftSeen`. Lazily created. */
-    private sentGiftIds?: Set<string>;
+    /** Kicks gifts already sent, id -> expiry ms; see `markGiftSeen`. Lazily loaded. */
+    private sentGiftIds?: Map<string, number>;
+    /** Channel slug `sentGiftIds` was loaded for. */
+    private sentGiftsChannel?: string | null;
 
     constructor() {
         super(Kick.namespace, 'Kick', channelSlugFromPath(window.location.pathname)!);
@@ -553,7 +584,7 @@ export class Kick extends Seed {
                 }
                 const json = data as KickKicksGiftedData;
                 const gift = this.prepareKicksGiftedMessage(json);
-                if (!this.markGiftSeen(gift.id)) {
+                if (!this.markGiftSeen(gift.id, giftExpiry(json))) {
                     return { status: 'ignored', reason: 'Kicks gift already sent (pinned-gifts recovery)' };
                 }
                 this.sendChatMessages([gift]);
@@ -931,8 +962,10 @@ export class Kick extends Seed {
 
         const messages = gifts
             .filter(isRecord)
-            .map(gift => this.prepareKicksGiftedMessage(gift as KickKicksGiftedData))
-            .filter(message => this.markGiftSeen(message.id));
+            .map(gift => gift as KickKicksGiftedData)
+            .map(gift => ({ gift, message: this.prepareKicksGiftedMessage(gift) }))
+            .filter(({ gift, message }) => this.markGiftSeen(message.id, giftExpiry(gift)))
+            .map(({ message }) => message);
 
         if (messages.length > 0) {
             this.log(`Recovered ${messages.length} pinned Kicks gift(s).`);
@@ -943,14 +976,68 @@ export class Kick extends Seed {
 
     /**
      * A gift can reach us up to three times: our own pinned-gifts fetch, the page's
-     * copy of that fetch, and the live `KicksGifted` event. SNEED does not dedupe, so
-     * a paid message must be sent once. Returns false when the id was already sent.
+     * copy of that fetch, and the live `KicksGifted` event. Pinned gifts also come
+     * back on every reload for up to two hours, and each copy replays the overlay's
+     * paid alert, so a paid message must be sent once. Returns false when the id was
+     * already sent.
+     *
+     * Sent ids persist in sessionStorage per channel until the gift's `expires_at`,
+     * so they survive a reload of the same tab; other tabs rely on SNEED's dedupe.
      */
-    private markGiftSeen(id: string): boolean {
-        this.sentGiftIds ??= new Set<string>();
-        if (this.sentGiftIds.has(id)) return false;
-        this.sentGiftIds.add(id);
+    private markGiftSeen(id: string, expiresAt: number = giftExpiry(null)): boolean {
+        const gifts = this.sentGifts();
+        if (gifts.has(id)) return false;
+        gifts.set(id, expiresAt);
+        this.saveSentGifts(gifts);
         return true;
+    }
+
+    private sentGiftsKey(): string | null {
+        return this.channel ? SENT_GIFTS_KEY + this.channel.toLowerCase() : null;
+    }
+
+    /** This channel's sent gifts, loaded from sessionStorage minus expired ones. */
+    private sentGifts(): Map<string, number> {
+        if (this.sentGiftIds !== undefined && this.sentGiftsChannel === this.channel) return this.sentGiftIds;
+
+        const gifts = new Map<string, number>();
+        const key = this.sentGiftsKey();
+        const now = Date.now();
+        try {
+            const raw = key === null ? null : sessionStore()?.getItem(key);
+            const stored: unknown = typeof raw === 'string' ? JSON.parse(raw) : null;
+            if (isRecord(stored)) {
+                for (const [id, expiry] of Object.entries(stored)) {
+                    if (typeof expiry === 'number' && expiry > now) gifts.set(id, expiry);
+                }
+            }
+        } catch {
+            // Unreadable or corrupt storage: start empty.
+        }
+
+        this.sentGiftIds = gifts;
+        this.sentGiftsChannel = this.channel;
+        this.saveSentGifts(gifts);
+        return gifts;
+    }
+
+    /** Persist unexpired sent gifts; storage failures only cost reload dedupe. */
+    private saveSentGifts(gifts: Map<string, number>): void {
+        const key = this.sentGiftsKey();
+        if (key === null) return;
+
+        const now = Date.now();
+        const live: Record<string, number> = {};
+        for (const [id, expiry] of gifts) {
+            if (expiry > now) live[id] = expiry;
+        }
+        try {
+            const store = sessionStore();
+            if (Object.keys(live).length === 0) store?.removeItem(key);
+            else store?.setItem(key, JSON.stringify(live));
+        } catch {
+            // Quota or access errors: in-memory dedupe still holds for this page.
+        }
     }
 
     //

@@ -44,6 +44,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 /** A Kick instance with no constructor side effects and everything observable. */
 function makeKick() {
+    // Sent gift ids persist here; every test starts from a fresh tab.
+    sessionStorage.clear();
     const kick = Object.create(Kick.prototype);
     kick.platform = 'Kick';
     kick.channel = 'testchannel';
@@ -1266,6 +1268,63 @@ describe('Kick pinned gifts', () => {
         feed(kick, liveFrame({ ...pinnedResponse.data.pinned_gifts[0], gift_transaction_id: 'b5672ba5-f3a9-4102-9211-77376b082e43' }));
 
         expect(kick.sendChatMessages).toHaveBeenCalledTimes(2);
+    });
+
+    describe('across reloads', () => {
+        const KEY = 'chuck:kick:sent-gifts:testchannel';
+        const hourFromNow = () => new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        const freshPinned = () => ({
+            data: { pinned_gifts: [{ ...pinnedResponse.data.pinned_gifts[0], expires_at: hourFromNow() }] },
+        });
+
+        it('does not resend a pinned gift after the page reloads', () => {
+            const first = makeSpyKick();
+            const body = freshPinned();
+            expect(first.receivePinnedGifts(body)).toBe(1);
+
+            // A reload: new instance, same tab storage.
+            const reloaded = Object.assign(Object.create(Kick.prototype), first, {
+                sentGiftIds: undefined, sentGiftsChannel: undefined, sendChatMessages: vi.fn(),
+            });
+            expect(reloaded.receivePinnedGifts(body)).toBe(0);
+            expect(reloaded.sendChatMessages).not.toHaveBeenCalled();
+        });
+
+        it('stores the gift until its expires_at', () => {
+            const kick = makeSpyKick();
+            const body = freshPinned();
+            kick.receivePinnedGifts(body);
+
+            const stored = JSON.parse(sessionStorage.getItem(KEY));
+            expect(stored).toEqual({
+                'e18fd3ca-ff0c-471c-a901-92e314a46b68': Date.parse(body.data.pinned_gifts[0].expires_at),
+            });
+        });
+
+        it('prunes expired ids on load', () => {
+            const kick = makeSpyKick();
+            sessionStorage.setItem(KEY, JSON.stringify({
+                'e18fd3ca-ff0c-471c-a901-92e314a46b68': Date.now() - 1000,
+                'b5672ba5-f3a9-4102-9211-77376b082e43': Date.now() + 60_000,
+                junk: 'x',
+            }));
+
+            expect(kick.receivePinnedGifts(freshPinned())).toBe(1);
+            expect(Object.keys(JSON.parse(sessionStorage.getItem(KEY))).sort()).toEqual([
+                'b5672ba5-f3a9-4102-9211-77376b082e43',
+                'e18fd3ca-ff0c-471c-a901-92e314a46b68',
+            ]);
+        });
+
+        it('keeps channels apart and survives corrupt storage', () => {
+            const kick = makeSpyKick();
+            sessionStorage.setItem('chuck:kick:sent-gifts:other', JSON.stringify({
+                'e18fd3ca-ff0c-471c-a901-92e314a46b68': Date.now() + 60_000,
+            }));
+            sessionStorage.setItem(KEY, '{not json');
+
+            expect(kick.receivePinnedGifts(freshPinned())).toBe(1);
+        });
     });
 
     const deletedFrame = (channel, data) => JSON.stringify({
