@@ -138,6 +138,16 @@ interface KickViewersEntry {
     viewers?: number;
 }
 
+/** `GET web.kick.com/api/v1/channels/{slug}/livestream`; `id` is a UUID, not the numeric id. */
+interface KickLivestreamResponse {
+    data?: { livestream?: { id?: string } | null };
+}
+
+/** `GET web.kick.com/api/v1/livestreams/{uuid}/viewer-count`. */
+interface KickViewerCountResponse {
+    data?: { show_view_count?: boolean; viewer_count?: number };
+}
+
 /** A single decoded realtime event, provider-independent. */
 export interface KickEvent {
     kind: 'event';
@@ -233,7 +243,8 @@ const SUBSCRIPTION_VALUE_USD = 5;
 const KICKS_CURRENCY = 'KICKS';
 
 const EMOTE_PATTERN = /\[emote:(\d+):([^\]]+)\]/g;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** RFC 9562 versions 1-8: livestream ids are UUIDv7. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 //
 // Small pure helpers
@@ -323,6 +334,11 @@ export class Kick extends Seed {
     /** Chatroom id, from REST channel info or a `chatrooms.{id}.v2` subscription. */
     chatroom_id: number | null = null;
     livestream_id: number | null = null;
+    /**
+     * UUID of the current livestream, distinct from the numeric `livestream_id`.
+     * The page polls `/api/v1/livestreams/{uuid}/viewer-count` with it.
+     */
+    livestream_uuid: string | null = null;
 
     /** True once REST channel info landed; REST ids outrank learned ones. */
     private idsFromRest = false;
@@ -728,6 +744,7 @@ export class Kick extends Seed {
         this.channel_id = null;
         this.chatroom_id = null;
         this.livestream_id = null;
+        this.livestream_uuid = null;
         this.idsFromRest = false;
         this.setChannel(slug);
         void this.fetchChatHistory();
@@ -772,7 +789,10 @@ export class Kick extends Seed {
 
         // Only a payload that actually carries a livestream may clear the id.
         if ('livestream' in info) {
-            this.livestream_id = toFiniteNumber(info.livestream?.id);
+            const livestreamId = toFiniteNumber(info.livestream?.id);
+            // The UUID belongs to one livestream; a new or ended stream invalidates it.
+            if (livestreamId !== this.livestream_id) this.livestream_uuid = null;
+            this.livestream_id = livestreamId;
         }
 
         const viewers = toFiniteNumber(info.livestream?.viewer_count ?? info.livestream?.viewers);
@@ -790,16 +810,49 @@ export class Kick extends Seed {
         return segment === this.channel?.toLowerCase() || segment === String(this.channel_id);
     }
 
-    /** Fetch and apply this channel's REST record; false when that failed. */
+    /**
+     * Fetch and apply this channel's REST record; false when that failed.
+     * While live, also learns the livestream UUID the viewer-count endpoint needs.
+     */
     async fetchChannelInfo(): Promise<boolean> {
         try {
             const response = await fetch(`https://kick.com/api/v2/channels/${this.channel}`);
             this.applyChannelInfo(await response.json() as KickChannelInfo);
-            return true;
         } catch (error) {
             this.error('Failed to fetch channel info.', error);
             return false;
         }
+
+        if (this.livestream_id !== null && this.livestream_uuid === null) {
+            await this.fetchLivestreamUuid();
+        }
+        return true;
+    }
+
+    /** Learn the livestream UUID from `web.kick.com/api/v1/channels/{slug}/livestream`. */
+    async fetchLivestreamUuid(): Promise<void> {
+        try {
+            const response = await fetch(`https://web.kick.com/api/v1/channels/${this.channel}/livestream`);
+            this.receiveLivestream(await response.json());
+        } catch (error) {
+            this.error('Failed to fetch livestream.', error);
+        }
+    }
+
+    /** Apply a `/api/v1/channels/{slug}/livestream` payload; returns the UUID learned. */
+    receiveLivestream(json: unknown): string | null {
+        const data = isRecord(json) ? (json as KickLivestreamResponse).data : undefined;
+        if (!isRecord(data) || !('livestream' in data)) return null;
+
+        const id = data.livestream?.id;
+        this.livestream_uuid = isUuid(id) ? id : null;
+        return this.livestream_uuid;
+    }
+
+    /** True when a URL path is this channel's `/api/v1/channels/{slug}/livestream`. */
+    private isLivestreamPath(pathname: string): boolean {
+        const match = /^\/api\/v1\/channels\/([^/]+)\/livestream$/.exec(pathname);
+        return match !== null && decodeURIComponent(match[1]).toLowerCase() === this.channel?.toLowerCase();
     }
 
     /** Fetch channel info, then replay existing chat history oldest-first. */
@@ -895,18 +948,46 @@ export class Kick extends Seed {
     }
 
     /**
-     * The page polls `/current-viewers` once a minute through TanStack Query, which
-     * pauses polling while the tab is hidden, and the `LivestreamUpdated` push lives
-     * on a `private-livestream.{id}` channel anonymous viewers may not join. A
-     * streamer's Kick tab is usually in the background, so CHUCK asks for the
-     * count itself every interval, even while the page is polling too. Without a
-     * live livestream id it re-reads the channel record, which notices a stream
-     * that started or ended after the page loaded.
+     * Apply a `/api/v1/livestreams/{uuid}/viewer-count` payload for our livestream;
+     * returns the count sent, or null when it was not ours or carried no count.
+     */
+    receiveViewerCount(uuid: string, json: unknown): number | null {
+        if (this.livestream_uuid === null || uuid.toLowerCase() !== this.livestream_uuid.toLowerCase()) return null;
+
+        const data = isRecord(json) ? (json as KickViewerCountResponse).data : undefined;
+        const viewers = toFiniteNumber(data?.viewer_count);
+        if (viewers === null) return null;
+
+        this.sendViewerCount(viewers);
+        return viewers;
+    }
+
+    /**
+     * The page polls `/api/v1/livestreams/{uuid}/viewer-count` through TanStack
+     * Query, which pauses polling while the tab is hidden, and the
+     * `LivestreamUpdated` push lives on a `private-livestream.{id}` channel
+     * anonymous viewers may not join. A streamer's Kick tab is usually in the
+     * background, so CHUCK asks for the count itself every interval, even while
+     * the page is polling too. The older `/current-viewers` endpoint lags behind
+     * and is only the fallback. Without a live livestream id it re-reads the
+     * channel record, which notices a stream that started or ended after the
+     * page loaded.
      */
     async pollViewers(): Promise<void> {
         if (this.livestream_id === null) {
             await this.fetchChannelInfo();
             return;
+        }
+
+        if (this.livestream_uuid === null) await this.fetchLivestreamUuid();
+        if (this.livestream_uuid !== null) {
+            const uuid = this.livestream_uuid;
+            try {
+                const response = await fetch(`https://web.kick.com/api/v1/livestreams/${uuid}/viewer-count`);
+                if (response.ok !== false && this.receiveViewerCount(uuid, await response.json()) !== null) return;
+            } catch (error) {
+                this.log('Viewer-count poll failed; falling back to /current-viewers.', error);
+            }
         }
 
         try {
@@ -995,7 +1076,28 @@ export class Kick extends Seed {
                 return;
             }
 
-            if (this.isChannelInfoPath(new URL(response.url, 'https://kick.com').pathname)) {
+            const pathname = new URL(response.url, 'https://kick.com').pathname;
+
+            const viewerCount = /^\/api\/v1\/livestreams\/([^/]+)\/viewer-count$/.exec(pathname);
+            if (viewerCount !== null) {
+                const json = await response.clone().json() as unknown;
+                const sent = this.receiveViewerCount(decodeURIComponent(viewerCount[1]), json);
+                if (sent === null) {
+                    this.recordFetchIgnored(response.url, 'GET', response.status, 'Viewer count for another livestream');
+                    return;
+                }
+                this.recordFetchHandled(response.url, 'GET', response.status, json, { viewers: sent });
+                return;
+            }
+
+            if (this.isLivestreamPath(pathname)) {
+                const json = await response.clone().json() as unknown;
+                this.receiveLivestream(json);
+                this.recordFetchHandled(response.url, 'GET', response.status, json, { livestream_uuid: this.livestream_uuid });
+                return;
+            }
+
+            if (this.isChannelInfoPath(pathname)) {
                 const json = await response.clone().json() as KickChannelInfo;
                 if (!this.applyChannelInfo(json)) {
                     this.recordFetchIgnored(response.url, 'GET', response.status, 'Channel info for another channel');
@@ -1009,7 +1111,7 @@ export class Kick extends Seed {
                 return;
             }
 
-            const pinned = /^\/api\/v1\/kicks\/(\d+)\/pinned-gifts$/.exec(new URL(response.url, 'https://kick.com').pathname);
+            const pinned = /^\/api\/v1\/kicks\/(\d+)\/pinned-gifts$/.exec(pathname);
             if (pinned !== null && (this.channel_id === null || Number(pinned[1]) === this.channel_id)) {
                 const json = await response.clone().json() as unknown;
                 const sent = this.receivePinnedGifts(json);

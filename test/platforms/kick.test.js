@@ -51,6 +51,7 @@ function makeKick() {
     kick.channel_id = null;
     kick.chatroom_id = null;
     kick.livestream_id = null;
+    kick.livestream_uuid = null;
     kick.idsFromRest = false;
     kick.unknownBadges = new Set();
     kick.viewers = null;
@@ -804,6 +805,50 @@ describe('Kick HTTP intercept', () => {
         expect(kick.sendViewerCount).toHaveBeenCalledWith(12);
     });
 
+    it('sends counts from the page\'s /viewer-count poll for our livestream only', async () => {
+        const uuid = '01a1d052-ae90-7df7-92ea-b39fe804c714';
+        const kick = makeSpyKick();
+        kick.recordFetchHandled = vi.fn();
+        kick.recordFetchIgnored = vi.fn();
+        kick.livestream_uuid = uuid;
+        const body = { data: { show_view_count: true, viewer_count: 1404 } };
+
+        await kick.onFetchResponse(jsonResponse('https://web.kick.com/api/v1/livestreams/01a1d052-ae90-7df7-92ea-000000000000/viewer-count', body));
+        expect(kick.sendViewerCount).not.toHaveBeenCalled();
+        expect(kick.recordFetchIgnored).toHaveBeenCalled();
+
+        await kick.onFetchResponse(jsonResponse(`https://web.kick.com/api/v1/livestreams/${uuid}/viewer-count`, body));
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(1404);
+    });
+
+    it('ignores /viewer-count before the uuid is known', async () => {
+        const kick = makeSpyKick();
+        kick.recordFetchIgnored = vi.fn();
+
+        await kick.onFetchResponse(jsonResponse(
+            'https://web.kick.com/api/v1/livestreams/01a1d052-ae90-7df7-92ea-b39fe804c714/viewer-count',
+            { data: { viewer_count: 5 } },
+        ));
+
+        expect(kick.sendViewerCount).not.toHaveBeenCalled();
+    });
+
+    it('learns the livestream uuid from the page\'s livestream request', async () => {
+        const kick = makeSpyKick();
+        kick.recordFetchHandled = vi.fn();
+        kick.recordFetchIgnored = vi.fn();
+        const body = { data: { livestream: { id: '01a1d052-ae90-7df7-92ea-b39fe804c714' } } };
+
+        await kick.onFetchResponse(jsonResponse('https://web.kick.com/api/v1/channels/someone-else/livestream', body));
+        expect(kick.livestream_uuid).toBeNull();
+
+        await kick.onFetchResponse(jsonResponse('https://web.kick.com/api/v1/channels/TestChannel/livestream', body));
+        expect(kick.livestream_uuid).toBe('01a1d052-ae90-7df7-92ea-b39fe804c714');
+
+        await kick.onFetchResponse(jsonResponse('https://web.kick.com/api/v1/channels/testchannel/livestream', { data: { livestream: null } }));
+        expect(kick.livestream_uuid).toBeNull();
+    });
+
     it('ignores unmonitored endpoints', async () => {
         const kick = makeSpyKick();
         kick.recordFetchIgnored = vi.fn();
@@ -845,10 +890,60 @@ describe('Kick viewer polling', () => {
         fetchSpy = undefined;
     });
 
-    it('polls the livestream count once the page has gone quiet', async () => {
+    const LIVESTREAM_UUID = '01a1d052-ae90-7df7-92ea-b39fe804c714';
+
+    it('polls /viewer-count by livestream uuid', async () => {
         const kick = makeSpyKick();
         kick.livestream_id = 77;
-        serve({ 'https://kick.com/current-viewers': [{ livestream_id: 77, viewers: 1302 }] });
+        kick.livestream_uuid = LIVESTREAM_UUID;
+        serve({
+            [`https://web.kick.com/api/v1/livestreams/${LIVESTREAM_UUID}/viewer-count`]:
+                { data: { show_view_count: true, viewer_count: 1404 } },
+        });
+
+        await kick.pollViewers();
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(1404);
+    });
+
+    it('learns the uuid before polling /viewer-count', async () => {
+        const kick = makeSpyKick();
+        kick.livestream_id = 77;
+        serve({
+            'https://web.kick.com/api/v1/channels/testchannel/livestream': { data: { livestream: { id: LIVESTREAM_UUID } } },
+            [`https://web.kick.com/api/v1/livestreams/${LIVESTREAM_UUID}/viewer-count`]: { data: { viewer_count: 9 } },
+        });
+
+        await kick.pollViewers();
+
+        expect(kick.livestream_uuid).toBe(LIVESTREAM_UUID);
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(9);
+    });
+
+    it('falls back to /current-viewers when /viewer-count has no count', async () => {
+        const kick = makeSpyKick();
+        kick.livestream_id = 77;
+        kick.livestream_uuid = LIVESTREAM_UUID;
+        serve({
+            [`https://web.kick.com/api/v1/livestreams/${LIVESTREAM_UUID}/viewer-count`]: { message: 'Not Found' },
+            'https://kick.com/current-viewers': [{ livestream_id: 77, viewers: 1302 }],
+        });
+
+        await kick.pollViewers();
+
+        expect(fetchSpy).toHaveBeenCalledWith('https://kick.com/current-viewers?ids[]=77');
+        expect(kick.sendViewerCount).toHaveBeenCalledTimes(1);
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(1302);
+    });
+
+    it('falls back to /current-viewers when the uuid is unknown', async () => {
+        const kick = makeSpyKick();
+        kick.livestream_id = 77;
+        serve({
+            'https://web.kick.com/api/v1/channels/testchannel/livestream': { data: { livestream: null } },
+            'https://kick.com/current-viewers': [{ livestream_id: 77, viewers: 1302 }],
+        });
 
         await kick.pollViewers();
 
@@ -863,12 +958,31 @@ describe('Kick viewer polling', () => {
             'https://kick.com/api/v2/channels/testchannel': {
                 id: 42, slug: 'testchannel', chatroom: { id: 7 }, livestream: { id: 9001, viewer_count: 88 },
             },
+            'https://web.kick.com/api/v1/channels/testchannel/livestream': { data: { livestream: { id: LIVESTREAM_UUID } } },
         });
 
         await kick.pollViewers();
 
         expect(kick.livestream_id).toBe(9001);
+        expect(kick.livestream_uuid).toBe(LIVESTREAM_UUID);
         expect(kick.sendViewerCount).toHaveBeenCalledWith(88);
+    });
+
+    it('forgets the uuid when the livestream changes', async () => {
+        const kick = makeSpyKick();
+        kick.livestream_id = 9001;
+        kick.livestream_uuid = LIVESTREAM_UUID;
+        serve({
+            'https://kick.com/api/v2/channels/testchannel': {
+                id: 42, slug: 'testchannel', chatroom: { id: 7 }, livestream: { id: 9002 },
+            },
+            'https://web.kick.com/api/v1/channels/testchannel/livestream': { data: { livestream: null } },
+        });
+
+        await kick.fetchChannelInfo();
+
+        expect(kick.livestream_id).toBe(9002);
+        expect(kick.livestream_uuid).toBeNull();
     });
 
     it('re-reads channel info when the livestream drops out of the answer', async () => {
