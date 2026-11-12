@@ -14,7 +14,7 @@
  * - Reactions use FEEDBACK_ADD_STREAMING_REACTION_SUBSCRIBE subscription
  */
 
-import { Seed, ChatMessage, uuidv5, EventStatus, PatchedWebSocket } from '../core/index.js';
+import { Seed, ChatMessage, uuidv5, EventStatus, PatchedWebSocket, parseUrl } from '../core/index.js';
 
 interface FBBadge {
     identity_badge_type: string;
@@ -265,7 +265,11 @@ export class Facebook extends Seed {
 
     async onFetchResponse(response: Response): Promise<void> {
         try {
-            const url = new URL(response.url);
+            const url = parseUrl(response.url);
+            if (url === null) {
+                this.recordFetchIgnored(response.url, 'GET', response.status, 'Response has no URL');
+                return;
+            }
 
             // Capture GraphQL requests
             if (url.pathname.includes('/api/graphql') || url.pathname.includes('/graphql')) {
@@ -314,7 +318,11 @@ export class Facebook extends Seed {
         if (xhr.readyState !== XMLHttpRequest.DONE) return;
 
         try {
-            const url = new URL(xhr.responseURL);
+            const url = parseUrl(xhr.responseURL);
+            if (url === null) {
+                this.recorder.recordXhr(xhr.responseURL, 'GET', xhr.status, null, EventStatus.IGNORED, null, 'Response has no URL');
+                return;
+            }
 
             // Capture GraphQL XHR
             if (url.pathname.includes('/api/graphql') || url.pathname.includes('/graphql')) {
