@@ -792,7 +792,10 @@ export class Kick extends Seed {
             const livestreamId = toFiniteNumber(info.livestream?.id);
             // The UUID belongs to one livestream; a new or ended stream invalidates it.
             if (livestreamId !== this.livestream_id) this.livestream_uuid = null;
+            const ended = this.livestream_id !== null && livestreamId === null;
             this.livestream_id = livestreamId;
+            // Nothing else would ever replace the last count of a stream that is over.
+            if (ended) this.sendViewerCount(0);
         }
 
         const viewers = toFiniteNumber(info.livestream?.viewer_count ?? info.livestream?.viewers);

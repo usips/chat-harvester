@@ -998,7 +998,26 @@ describe('Kick viewer polling', () => {
         await kick.pollViewers();
 
         expect(kick.livestream_id).toBeNull();
+        expect(kick.sendViewerCount).toHaveBeenCalledTimes(1);
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(0);
+    });
+
+    it('sends 0 once when the stream ends, not while it stays offline', async () => {
+        const kick = makeSpyKick();
+        serve({
+            'https://kick.com/api/v2/channels/testchannel': {
+                id: 42, slug: 'testchannel', chatroom: { id: 7 }, livestream: null,
+            },
+        });
+
+        await kick.pollViewers();
         expect(kick.sendViewerCount).not.toHaveBeenCalled();
+
+        kick.livestream_id = 77;
+        await kick.fetchChannelInfo();
+        await kick.fetchChannelInfo();
+        expect(kick.sendViewerCount).toHaveBeenCalledTimes(1);
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(0);
     });
 
     it('logs rather than throws when the poll fails', async () => {
