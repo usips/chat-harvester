@@ -88,7 +88,7 @@ vi.stubGlobal('unsafeWindow', undefined);
 // Import after mocks are set up
 const { ChatMessage } = await import('../../src/core/message.js');
 const { YouTube } = await import('../../src/platforms/youtube.js');
-const { liveStateFromPlayerResponse, viewerCountFromRenderer } = await import('../../src/platforms/youtube.js');
+const { liveStateFromPlayerResponse, viewerCountFromRenderer, viewerCountFromEntity } = await import('../../src/platforms/youtube.js');
 
 // Verbatim updateViewershipAction payloads from youtubei/v1/updated_metadata, 2026-09-11.
 // QZucLvN3IDs was live; Mxc4L0fgw0s is a regular video.
@@ -188,23 +188,92 @@ describe('YouTube live viewer counts', () => {
         expect(live.sendViewerCount).toHaveBeenCalledWith(0);
     });
 
-    it('ignores the page\'s view counter unless live', () => {
-        const label = text => ({ getAttribute: () => text, textContent: text });
-        const spy = vi.spyOn(document, 'querySelector');
-        const mutation = [{ type: 'attributes' }];
-        try {
-            spy.mockReturnValue(label('124 views'));
-            const video = makeYt(false);
-            video.onViewCountChange(mutation, null);
-            expect(video.sendViewerCount).not.toHaveBeenCalled();
+    // The page's #view-count element as a MutationRecord target.
+    const labelMutations = (text, times = 1) => {
+        const target = { getAttribute: name => (name === 'aria-label' ? text : null) };
+        return Array.from({ length: times }, () => ({ type: 'attributes', target }));
+    };
+    // Tracks sends the way Seed.sendViewerCount does.
+    const trackViewers = yt => {
+        yt.sendViewerCount = vi.fn(count => { yt.viewers = count; });
+        return yt;
+    };
 
-            spy.mockReturnValue(label('16,037 watching now'));
-            const live = makeYt(true);
-            live.onViewCountChange(mutation, null);
-            expect(live.sendViewerCount).toHaveBeenCalledWith(16037);
-        } finally {
-            spy.mockRestore();
+    it('ignores the page\'s view counter unless live', () => {
+        const video = makeYt(false);
+        video.onViewCountChange(labelMutations('124 views'), null);
+        expect(video.sendViewerCount).not.toHaveBeenCalled();
+
+        const live = makeYt(true);
+        live.onViewCountChange(labelMutations('16,037 watching now'), null);
+        expect(live.sendViewerCount).toHaveBeenCalledWith(16037);
+    });
+
+    it('sends the page\'s view counter once per change', () => {
+        const yt = trackViewers(makeYt(true));
+        // YouTube sets the aria-label 8 times for one change.
+        yt.onViewCountChange(labelMutations('45,479 watching now', 8), null);
+        yt.onViewCountChange(labelMutations('45,479 watching now', 8), null);
+        yt.onViewCountChange(labelMutations('45,480 watching now', 8), null);
+
+        expect(yt.sendViewerCount.mock.calls).toEqual([[45479], [45480]]);
+    });
+
+    // updated_metadata as of 2026-11: no updateViewershipAction, the count lives in
+    // frameworkUpdates' viewCountEntity, which carries no isLive.
+    const ENTITY_METADATA = {
+        actions: [{ updateDateTextAction: {} }],
+        frameworkUpdates: { entityBatchUpdate: { mutations: [
+            { entityKey: 'other', type: 'ENTITY_MUTATION_TYPE_REPLACE', payload: { likeCountEntity: {} } },
+            { entityKey: 'Egt2aWV3Q291bnQ', type: 'ENTITY_MUTATION_TYPE_REPLACE', payload: { viewCountEntity: {
+                viewCount: { simpleText: '45,479 watching now' }, extraShortViewCount: { simpleText: '45K' },
+                unlabeledViewCountValue: { simpleText: '45,479' }, viewCountNumber: '45479',
+            } } },
+        ] } },
+    };
+
+    it('reads viewers from viewCountEntity on a live page', async () => {
+        const yt = makeYt(true);
+        await yt.onFetchResponse(metadataResponse(ENTITY_METADATA));
+        await yt.onFetchResponse(metadataResponse(ENTITY_METADATA));
+
+        // Every poll is sent: it is the heartbeat that keeps SNEED's entry fresh.
+        expect(yt.sendViewerCount.mock.calls).toEqual([[45479], [45479]]);
+        expect(yt.liveState).toBe(true);
+    });
+
+    it('ignores viewCountEntity unless the page is known live', async () => {
+        for (const state of [null, false]) {
+            const yt = makeYt(state);
+            await yt.onFetchResponse(metadataResponse(ENTITY_METADATA));
+            expect(yt.sendViewerCount).not.toHaveBeenCalled();
+            expect(yt.liveState).toBe(state);
         }
+    });
+
+    it('falls back to the unlabeled count in viewCountEntity', () => {
+        expect(viewerCountFromEntity({ unlabeledViewCountValue: { simpleText: '45,479' } })).toBe(45479);
+        expect(viewerCountFromEntity({ viewCountNumber: '12' })).toBe(12);
+        expect(viewerCountFromEntity({})).toBeNull();
+    });
+
+    it('observes the view counter even when the channel lookup fails', async () => {
+        const yt = makeYt();
+        yt.ensureViewCountObserver = vi.fn();
+        yt.setChannel = vi.fn(channel => { yt.channel = channel; });
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(() => Promise.reject(new Error('offline')));
+        window.ytInitialPlayerResponse = LIVE_PLAYER;
+        try {
+            await yt.onDocumentReady({});
+        } finally {
+            globalThis.fetch = originalFetch;
+            delete window.ytInitialPlayerResponse;
+        }
+
+        expect(yt.ensureViewCountObserver).toHaveBeenCalled();
+        expect(yt.liveState).toBe(true);
+        expect(yt.setChannel).toHaveBeenCalledWith('test123');
     });
 
     it('does not flip to not-live on a page with no player data', () => {

@@ -189,6 +189,18 @@ interface YTLiveChatResponse {
     };
 }
 
+/**
+ * The view count in `updated_metadata`'s entity store (2026-11). Unlike the old
+ * renderer it has no isLive flag, so it may only be trusted on a known-live page.
+ */
+interface YTViewCountEntity {
+    viewCount?: { simpleText?: string };
+    extraShortViewCount?: { simpleText?: string };
+    unlabeledViewCountValue?: { simpleText?: string };
+    /** The count as a plain number string, e.g. "45479". */
+    viewCountNumber?: string;
+}
+
 interface YTUpdatedMetadataResponse {
     actions?: {
         updateViewershipAction?: {
@@ -197,6 +209,24 @@ interface YTUpdatedMetadataResponse {
             };
         };
     }[];
+    frameworkUpdates?: {
+        entityBatchUpdate?: {
+            mutations?: {
+                payload?: {
+                    viewCountEntity?: YTViewCountEntity;
+                };
+            }[];
+        };
+    };
+}
+
+/** Number in a `viewCountEntity` (viewCountNumber, else the unlabeled count's digits). */
+export function viewerCountFromEntity(entity: YTViewCountEntity): number | null {
+    const raw = entity.viewCountNumber ?? entity.unlabeledViewCountValue?.simpleText ?? '';
+    const digits = String(raw).replace(/[^\d]/g, '');
+    if (digits.length === 0) return null;
+    const count = parseInt(digits, 10);
+    return Number.isFinite(count) ? count : null;
 }
 
 /**
@@ -231,6 +261,10 @@ export class YouTube extends Seed {
     static namespace = 'fd60ac36-d6b5-49dc-aee6-b0d87d130582';
 
     private _cssInjected = false;
+
+    private _viewCountObserver: MutationObserver | null = null;
+    private _viewCountElem: Element | null = null;
+    private _viewCountTimer: ReturnType<typeof setInterval> | null = null;
 
     /**
      * Whether this tab's video is live: null until known. A regular video's "views"
@@ -559,6 +593,8 @@ export class YouTube extends Seed {
 
         if (!is_chat_only) {
             this.setLiveState(liveStateFromPlayerResponse((WINDOW as YTWindow).ytInitialPlayerResponse), 'page');
+            // Independent of the channel lookup below, which can fail.
+            this.ensureViewCountObserver();
         }
 
         let author_url: string | null = null;
@@ -591,30 +627,6 @@ export class YouTube extends Seed {
         }
 
         this.log('Received channel info.', video_id, author_url, this.channel);
-
-        if (!is_chat_only) {
-            const checkForViewCount = (): boolean => {
-                const viewCountElem = document.querySelector('#view-count');
-                if (viewCountElem) {
-                    const observer = new MutationObserver(this.onViewCountChange.bind(this));
-                    observer.observe(viewCountElem, {
-                        attributes: true,
-                        attributeFilter: ['aria-label'],
-                        characterData: false,
-                        childList: false,
-                        subtree: false
-                    });
-                    return true;
-                }
-                return false;
-            };
-
-            if (!checkForViewCount()) {
-                const intervalId = setInterval(() => {
-                    if (checkForViewCount()) clearInterval(intervalId);
-                }, 1000);
-            }
-        }
     }
 
     async onFetchResponse(response: Response): Promise<void> {
@@ -682,17 +694,21 @@ export class YouTube extends Seed {
     private async _handleUpdatedMetadata(response: Response): Promise<void> {
         try {
             const json = await response.json() as YTUpdatedMetadataResponse;
-            const actions = json?.actions;
+            const actions = Array.isArray(json?.actions) ? json.actions : null;
+            const mutations = json?.frameworkUpdates?.entityBatchUpdate?.mutations;
+            const entity = Array.isArray(mutations)
+                ? mutations.find(mutation => mutation?.payload?.viewCountEntity)?.payload?.viewCountEntity
+                : undefined;
 
-            if (!actions) {
-                this.recordFetchIgnored(response.url, 'POST', response.status, 'No actions in updated_metadata');
+            if (!actions && !entity) {
+                this.recordFetchIgnored(response.url, 'POST', response.status, 'No view count in updated_metadata');
                 return;
             }
 
             let viewerCount: number | null = null;
             let live: boolean | null = null;
             const renderer = actions
-                .find(action => action.updateViewershipAction)
+                ?.find(action => action?.updateViewershipAction)
                 ?.updateViewershipAction?.viewCount?.videoViewCountRenderer;
 
             if (renderer) {
@@ -700,14 +716,18 @@ export class YouTube extends Seed {
                 // reports its total views, which are not viewers.
                 live = renderer.isLive === true;
                 this.setLiveState(live, 'updated_metadata');
-                if (live) {
-                    viewerCount = viewerCountFromRenderer(renderer);
-                    if (viewerCount !== null) this.sendViewerCount(viewerCount);
-                }
+                if (live) viewerCount = viewerCountFromRenderer(renderer);
+            } else if (entity) {
+                // The entity has no isLive: trust it only once the page says live.
+                live = this.liveState;
+                if (live === true) viewerCount = viewerCountFromEntity(entity);
             }
 
+            // Sent on every poll, changed or not: the poll is the live tab's heartbeat.
+            if (viewerCount !== null) this.sendViewerCount(viewerCount);
+
             this.recordFetchHandled(response.url, 'POST', response.status, json, {
-                actionCount: actions.length,
+                actionCount: actions?.length ?? 0,
                 live,
                 viewerCount,
             });
@@ -722,37 +742,47 @@ export class YouTube extends Seed {
         }
     }
 
-    onViewCountChange(mutationsList: MutationRecord[], _observer: MutationObserver): void {
+    /**
+     * Observe the watch page's `#view-count` label. One observer is kept for the
+     * tab; when YouTube replaces the element it is re-queried and re-attached.
+     * The label is a fallback for `updated_metadata`, which is the main source.
+     */
+    ensureViewCountObserver(): void {
+        if (this._viewCountElem?.isConnected) return;
+
+        const elem = document.querySelector('#view-count');
+        if (elem) {
+            this._viewCountObserver ??= new MutationObserver(this.onViewCountChange.bind(this));
+            this._viewCountObserver.disconnect();
+            this._viewCountObserver.observe(elem, {
+                attributes: true,
+                attributeFilter: ['aria-label'],
+                characterData: false,
+                childList: false,
+                subtree: false
+            });
+            this._viewCountElem = elem;
+        }
+
+        // Keep checking: the element may not exist yet, or may be swapped out later.
+        this._viewCountTimer ??= setInterval(() => this.ensureViewCountObserver(), 2000);
+    }
+
+    onViewCountChange(mutationsList: MutationRecord[], _observer: MutationObserver | null): void {
         // On a video or a finished stream this label is the total view count.
         if (this.liveState !== true) return;
 
-        for (const mutation of mutationsList) {
-            if (mutation.type === 'childList' || mutation.type === 'characterData' || mutation.type === 'attributes') {
-                const viewCountElem = document.querySelector('#view-count');
-                if (viewCountElem) {
-                    const ariaLabel = viewCountElem.getAttribute('aria-label');
-                    if (ariaLabel) {
-                        const numericOnly = ariaLabel.replace(/[^\d]/g, '');
-                        if (numericOnly) {
-                            const viewers = parseInt(numericOnly, 10);
-                            if (!isNaN(viewers)) {
-                                this.sendViewerCount(viewers);
-                                continue;
-                            }
-                        }
-                    }
+        // YouTube sets the label several times per change; read the element once.
+        const target = mutationsList.at(-1)?.target as Element | undefined;
+        const label = target?.getAttribute?.('aria-label');
+        if (!label) return;
 
-                    const text = viewCountElem.textContent || '';
-                    const match = text.replace(/,/g, '').match(/([\d,]+)\s+views/);
-                    if (match && match[1]) {
-                        const viewers = parseInt(match[1], 10);
-                        if (!isNaN(viewers)) {
-                            this.sendViewerCount(viewers);
-                        }
-                    }
-                }
-            }
-        }
+        const digits = label.replace(/[^\d]/g, '');
+        if (digits.length === 0) return;
+        const viewers = parseInt(digits, 10);
+        if (!Number.isFinite(viewers) || viewers === this.viewers) return;
+
+        this.sendViewerCount(viewers);
     }
 }
 
