@@ -11,7 +11,29 @@
  * - Capture rants (paid messages)
  */
 
-import { Seed, ChatMessage, uuidv5, EventStatus, parseUrl } from '../core/index.js';
+import { Seed, ChatMessage, uuidv5, EventStatus, parseUrl, WINDOW } from '../core/index.js';
+
+/** How often CHUCK checks the viewer count itself; see `pollViewers`. */
+export const VIEWER_POLL_MS = 60_000;
+
+/** The service the watch page polls for its "watching now" count. */
+const WATCHING_NOW_URL = 'https://wn0.rumble.com/service.php?name=video.watching-now&video_id=';
+
+/** `livestream_status` of a stream that is on air right now. */
+const LIVESTREAM_STATUS_LIVE = 2;
+
+/**
+ * `video.watching-now` answer, e.g.
+ * `{"data":{"video_id":443918684,"num_watching_now":5997,"viewer_count":5997,"livestream_status":2}}`.
+ */
+interface RumbleWatchingNow {
+    data?: {
+        video_id?: number | string;
+        viewer_count?: number | string | null;
+        num_watching_now?: number | string | null;
+        livestream_status?: number | null;
+    };
+}
 
 interface RumbleUser {
     id: string;
@@ -68,23 +90,80 @@ export class Rumble extends Seed {
     constructor() {
         const channel = null; // Cannot be determined before DOM is ready
         super(Rumble.namespace, 'Rumble', channel!);
+        setInterval(() => void this.pollViewers(), VIEWER_POLL_MS);
+    }
+
+    /** Video id from a pop-out chat path, `/chat/popup/{videoId}`, or null. */
+    static popupVideoId(pathname: string): string | null {
+        const match = /^\/chat\/popup\/(\d+)(?:\/|$)/.exec(pathname);
+        return match ? match[1] : null;
     }
 
     onDocumentReady(): void {
-        // Pop-out chat contains the channel ID in the URL
+        // The channel is the numeric video id. Pop-out chat carries it in the URL.
         let channel: string | null = null;
-        if (window.location.href.indexOf('/chat/popup/') >= 0) {
-            channel = String(parseInt(window.location.href.split('/').filter(x => x)[4], 10));
+        if (window.location.pathname.startsWith('/chat/popup/')) {
+            channel = Rumble.popupVideoId(window.location.pathname);
         } else {
-            // Otherwise, find the channel ID in the DOM (upvote button)
+            // Otherwise, find the video ID in the DOM (upvote button)
             const pill = document.querySelector('.rumbles-vote-pill') as HTMLElement | null;
-            channel = pill?.dataset.id ?? null;
+            channel = pill?.dataset.id || null;
         }
 
         if (channel !== null) {
             this.setChannel(channel);
             this.fetchEmotes();
+            void this.pollViewers();
         }
+    }
+
+    /**
+     * The watch page polls `video.watching-now` once a minute, but the pop-out chat
+     * never does, and background tabs throttle the page's timer. CHUCK asks for the
+     * count itself every interval so a pop-out alone still reports viewers. The
+     * request goes through the unpatched fetch so it doesn't pass through CHUCK's
+     * own fetch hook.
+     */
+    async pollViewers(): Promise<void> {
+        if (this.channel === null) return;
+
+        try {
+            const fetchFn = WINDOW.fetch.oldFetch ?? WINDOW.fetch;
+            const response = await fetchFn.call(WINDOW, WATCHING_NOW_URL + encodeURIComponent(this.channel), {
+                credentials: 'include'
+            });
+            this.receiveWatchingNow(await response.json());
+        } catch (error) {
+            this.error('Failed to poll viewer count.', error);
+        }
+    }
+
+    /**
+     * Apply a `video.watching-now` answer, from our own poll or the page's.
+     * Sends 0 (once) when the video is not live.
+     *
+     * @returns the count sent, or null when the answer was not usable.
+     */
+    receiveWatchingNow(json: unknown): number | null {
+        const data = (json as RumbleWatchingNow | null)?.data;
+        if (data === null || typeof data !== 'object') return null;
+
+        // Ignore answers about another video.
+        if (data.video_id !== undefined && this.channel !== null && String(data.video_id) !== String(this.channel)) {
+            return null;
+        }
+
+        if (data.livestream_status !== undefined && data.livestream_status !== LIVESTREAM_STATUS_LIVE) {
+            if (this.viewers !== 0) this.sendViewerCount(0);
+            return 0;
+        }
+
+        const raw = data.viewer_count ?? data.num_watching_now;
+        const viewers = typeof raw === 'number' ? raw : parseInt(raw ?? '', 10);
+        if (!Number.isFinite(viewers) || viewers < 0) return null;
+
+        this.sendViewerCount(viewers);
+        return viewers;
     }
 
     fetchEmotes(): void {
@@ -342,6 +421,10 @@ export class Rumble extends Seed {
                     const emoteCount = this.addEmotes(json.data.items);
                     this.recordFetchHandled(response.url, 'GET', response.status, json, { emoteCount });
                 });
+            } else if (url.searchParams.get('name') === 'video.watching-now') {
+                const json: unknown = await response.clone().json();
+                const viewers = this.receiveWatchingNow(json);
+                this.recordFetchHandled(response.url, 'GET', response.status, json, { viewers });
             } else {
                 this.recordFetchIgnored(response.url, 'GET', response.status, 'Not emote list');
             }
@@ -357,21 +440,29 @@ export class Rumble extends Seed {
     }
 
     onXhrOpen(xhr: XMLHttpRequest, _method: string, url: string, _async?: boolean, _user?: string, _password?: string): void {
-        if (url.startsWith('https://wn0.rumble.com/service.php')) {
+        const parsed = parseUrl(url);
+        if (parsed?.hostname === 'wn0.rumble.com' && parsed.searchParams.get('name') === 'video.watching-now') {
             xhr.addEventListener('readystatechange', (event) => this.onXhrServiceReadyStateChange(xhr, event));
         }
     }
 
     onXhrServiceReadyStateChange(xhr: XMLHttpRequest, _event: Event): void {
-        if (xhr.readyState !== XMLHttpRequest.DONE) return;
+        if (xhr.readyState !== 4 /* DONE */) return;
 
+        let json: unknown;
         if (xhr.responseType === 'json') {
-            const json = xhr.response as { data?: { viewer_count?: string; num_watching_now?: string } };
-            const viewers = parseInt(json?.data?.viewer_count || json?.data?.num_watching_now || '', 10);
-            if (!isNaN(viewers)) {
-                this.sendViewerCount(viewers);
+            json = xhr.response;
+        } else if (xhr.responseType === '' || xhr.responseType === 'text') {
+            try {
+                json = JSON.parse(xhr.responseText);
+            } catch {
+                return;
             }
+        } else {
+            return;
         }
+
+        this.receiveWatchingNow(json);
     }
 }
 

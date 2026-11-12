@@ -265,4 +265,159 @@ describe('Rumble Platform', () => {
             expect(rumble.recordFetchHandled).toHaveBeenCalledWith(response.url, 'GET', 200, json, { emoteCount: 1 });
         });
     });
+
+    describe('Viewer counts', () => {
+        // Captured from wn0.rumble.com during the audit.
+        const watchingNow = {
+            data: {
+                video_id: 443918684,
+                num_watching_now: 5997,
+                viewer_count: 5997,
+                livestream_status: 2,
+                scheduled_on_ts: null,
+                ls_streamed_on_ts: 1787332435,
+                ls_first_heartbeat_ts: 1787332434
+            }
+        };
+
+        let rumble;
+
+        beforeEach(() => {
+            rumble = Object.create(Rumble.prototype);
+            rumble.platform = 'Rumble';
+            rumble.channel = '443918684';
+            rumble.viewers = null;
+            rumble.log = vi.fn();
+            rumble.error = vi.fn();
+            rumble.recordFetchHandled = vi.fn();
+            rumble.recordFetchIgnored = vi.fn();
+            rumble.recorder = { record: vi.fn() };
+            rumble.sendViewerCount = vi.fn(function (count) { this.viewers = count; });
+        });
+
+        it('polls on a one minute interval', async () => {
+            const { VIEWER_POLL_MS } = await import('../../src/platforms/rumble.js');
+            expect(VIEWER_POLL_MS).toBe(60_000);
+        });
+
+        it('sends the count from a watching-now answer', () => {
+            expect(rumble.receiveWatchingNow(watchingNow)).toBe(5997);
+            expect(rumble.sendViewerCount).toHaveBeenCalledWith(5997);
+        });
+
+        it('falls back to num_watching_now and accepts numeric strings', () => {
+            rumble.receiveWatchingNow({ data: { num_watching_now: '42', livestream_status: 2 } });
+            expect(rumble.sendViewerCount).toHaveBeenCalledWith(42);
+        });
+
+        it('keeps a zero viewer_count instead of falling through', () => {
+            // Regression: `viewer_count || num_watching_now` skipped a real 0.
+            rumble.receiveWatchingNow({ data: { viewer_count: 0, num_watching_now: 12, livestream_status: 2 } });
+            expect(rumble.sendViewerCount).toHaveBeenCalledWith(0);
+        });
+
+        it('sends 0 once when the video is not live', () => {
+            rumble.viewers = 5997;
+            const ended = { data: { ...watchingNow.data, livestream_status: 3 } };
+
+            expect(rumble.receiveWatchingNow(ended)).toBe(0);
+            expect(rumble.receiveWatchingNow(ended)).toBe(0);
+            expect(rumble.sendViewerCount).toHaveBeenCalledTimes(1);
+            expect(rumble.sendViewerCount).toHaveBeenCalledWith(0);
+        });
+
+        it('ignores answers about another video', () => {
+            rumble.channel = '1';
+            expect(rumble.receiveWatchingNow(watchingNow)).toBeNull();
+            expect(rumble.sendViewerCount).not.toHaveBeenCalled();
+        });
+
+        it('ignores answers without data', () => {
+            expect(rumble.receiveWatchingNow({})).toBeNull();
+            expect(rumble.receiveWatchingNow(null)).toBeNull();
+            expect(rumble.receiveWatchingNow({ data: { livestream_status: 2 } })).toBeNull();
+            expect(rumble.sendViewerCount).not.toHaveBeenCalled();
+        });
+
+        it('polls watching-now through the unpatched fetch with credentials', async () => {
+            const oldFetch = vi.fn(() => Promise.resolve({ json: () => Promise.resolve(watchingNow) }));
+            window.fetch.oldFetch = oldFetch;
+            try {
+                await rumble.pollViewers();
+            } finally {
+                delete window.fetch.oldFetch;
+            }
+
+            expect(oldFetch).toHaveBeenCalledWith(
+                'https://wn0.rumble.com/service.php?name=video.watching-now&video_id=443918684',
+                { credentials: 'include' }
+            );
+            expect(window.fetch).not.toHaveBeenCalled();
+            expect(rumble.sendViewerCount).toHaveBeenCalledWith(5997);
+        });
+
+        it('does not poll before the video id is known', async () => {
+            rumble.channel = null;
+            const oldFetch = vi.fn();
+            window.fetch.oldFetch = oldFetch;
+            try {
+                await rumble.pollViewers();
+            } finally {
+                delete window.fetch.oldFetch;
+            }
+            expect(oldFetch).not.toHaveBeenCalled();
+        });
+
+        it('logs a failed poll instead of throwing', async () => {
+            window.fetch.oldFetch = vi.fn(() => Promise.reject(new Error('offline')));
+            try {
+                await rumble.pollViewers();
+            } finally {
+                delete window.fetch.oldFetch;
+            }
+            expect(rumble.error).toHaveBeenCalled();
+            expect(rumble.sendViewerCount).not.toHaveBeenCalled();
+        });
+
+        it('reads the page XHR whatever its responseType', () => {
+            const done = { readyState: 4 };
+
+            rumble.onXhrServiceReadyStateChange({ ...done, responseType: 'json', response: watchingNow });
+            rumble.onXhrServiceReadyStateChange({ ...done, responseType: '', responseText: JSON.stringify(watchingNow) });
+            rumble.onXhrServiceReadyStateChange({ ...done, responseType: 'text', responseText: 'not json' });
+            rumble.onXhrServiceReadyStateChange({ readyState: 3, responseType: 'json', response: watchingNow });
+
+            expect(rumble.sendViewerCount).toHaveBeenCalledTimes(2);
+        });
+
+        it('hooks only the watching-now service XHR', () => {
+            const xhr = { addEventListener: vi.fn() };
+            rumble.onXhrOpen(xhr, 'GET', 'https://wn0.rumble.com/service.php?name=video.watching-now&video_id=443918684');
+            rumble.onXhrOpen(xhr, 'GET', 'https://wn0.rumble.com/service.php?name=user.get');
+            expect(xhr.addEventListener).toHaveBeenCalledTimes(1);
+        });
+
+        it('reads a watching-now fetch response', async () => {
+            const response = {
+                url: 'https://wn0.rumble.com/service.php?name=video.watching-now&video_id=443918684',
+                status: 200,
+                clone: () => ({ json: () => Promise.resolve(watchingNow) })
+            };
+            await rumble.onFetchResponse(response);
+            expect(rumble.sendViewerCount).toHaveBeenCalledWith(5997);
+            expect(rumble.recordFetchHandled).toHaveBeenCalledWith(response.url, 'GET', 200, watchingNow, { viewers: 5997 });
+        });
+    });
+
+    describe('Channel detection', () => {
+        it('reads the video id from a pop-out chat path', () => {
+            expect(Rumble.popupVideoId('/chat/popup/443918684')).toBe('443918684');
+            expect(Rumble.popupVideoId('/chat/popup/443918684/')).toBe('443918684');
+        });
+
+        it('returns null rather than "NaN" for a malformed pop-out path', () => {
+            expect(Rumble.popupVideoId('/chat/popup/')).toBeNull();
+            expect(Rumble.popupVideoId('/chat/popup/abc')).toBeNull();
+        });
+    });
 });
