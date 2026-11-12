@@ -828,6 +828,75 @@ describe('Kick HTTP intercept', () => {
     });
 });
 
+describe('Kick viewer polling', () => {
+    let fetchSpy;
+
+    /** Answer each URL prefix with its JSON body. */
+    function serve(routes) {
+        fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+            const prefix = Object.keys(routes).find(key => String(url).startsWith(key));
+            if (prefix === undefined) throw new Error(`unexpected fetch ${url}`);
+            return { json: async () => routes[prefix] };
+        });
+    }
+
+    afterEach(() => {
+        fetchSpy?.mockRestore();
+        fetchSpy = undefined;
+    });
+
+    it('polls the livestream count once the page has gone quiet', async () => {
+        const kick = makeSpyKick();
+        kick.livestream_id = 77;
+        serve({ 'https://kick.com/current-viewers': [{ livestream_id: 77, viewers: 1302 }] });
+
+        await kick.pollViewers();
+
+        expect(fetchSpy).toHaveBeenCalledWith('https://kick.com/current-viewers?ids[]=77');
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(1302);
+    });
+
+    it('re-reads channel info when no livestream is known', async () => {
+        const kick = makeSpyKick();
+        kick.recordFetchHandled = vi.fn();
+        serve({
+            'https://kick.com/api/v2/channels/testchannel': {
+                id: 42, slug: 'testchannel', chatroom: { id: 7 }, livestream: { id: 9001, viewer_count: 88 },
+            },
+        });
+
+        await kick.pollViewers();
+
+        expect(kick.livestream_id).toBe(9001);
+        expect(kick.sendViewerCount).toHaveBeenCalledWith(88);
+    });
+
+    it('re-reads channel info when the livestream drops out of the answer', async () => {
+        const kick = makeSpyKick();
+        kick.livestream_id = 77;
+        serve({
+            'https://kick.com/current-viewers': [],
+            'https://kick.com/api/v2/channels/testchannel': {
+                id: 42, slug: 'testchannel', chatroom: { id: 7 }, livestream: null,
+            },
+        });
+
+        await kick.pollViewers();
+
+        expect(kick.livestream_id).toBeNull();
+        expect(kick.sendViewerCount).not.toHaveBeenCalled();
+    });
+
+    it('logs rather than throws when the poll fails', async () => {
+        const kick = makeSpyKick();
+        kick.livestream_id = 77;
+        fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+
+        await expect(kick.pollViewers()).resolves.toBeUndefined();
+        expect(kick.error).toHaveBeenCalledWith('Failed to poll viewer count.', expect.any(Error));
+    });
+});
+
 describe('Kick fetchChatHistory', () => {
     it('replays history oldest-first', async () => {
         const kick = makeSpyKick();
