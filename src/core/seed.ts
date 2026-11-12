@@ -93,6 +93,18 @@ interface Subscription {
 // Get the window object (handles userscript's unsafeWindow)
 export const WINDOW: ChuckWindow = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window) as ChuckWindow;
 
+/** How long a SNEED socket may sit in CONNECTING before CHUCK retries. */
+export const CONNECT_TIMEOUT_MS = 10_000;
+/** Delay before reconnecting a closed SNEED socket. */
+export const RECONNECT_DELAY_MS = 3_000;
+/** Most updates held while SNEED is unreachable; older ones are dropped. */
+export const MAX_QUEUED_UPDATES = 500;
+
+/** An update that only carries a viewer count. */
+function isViewersOnly(update: LivestreamUpdate): boolean {
+    return update.viewers !== undefined && update.messages === undefined && update.removals === undefined;
+}
+
 /**
  * Base class for all platform scrapers
  * Handles WebSocket/Fetch/XHR patching and communication with backend
@@ -109,6 +121,8 @@ export class Seed {
     chatSocketTimeout: ReturnType<typeof setTimeout> | null = null;
     chatMessageQueue: ChatMessage[] = [];
     updateQueue: LivestreamUpdate[] = [];
+    private queueOverflowWarned = false;
+    private documentReadyHandled = false;
 
     // Configuration
     serverUrl: string = DEFAULTS.serverUrl;
@@ -146,6 +160,12 @@ export class Seed {
 
         this.bindEvents();
         this.initUUID();
+
+        // In the extension, Config.get awaits chrome.storage, so DOMContentLoaded
+        // may already have fired before bindEvents ran.
+        if (document.readyState !== undefined && document.readyState !== 'loading') {
+            this.handleDocumentReady(new Event('DOMContentLoaded'));
+        }
     }
 
     //
@@ -198,18 +218,32 @@ export class Seed {
     // Page Events
     //
     bindEvents(): void {
-        document.addEventListener('DOMContentLoaded', (event) => this.onDocumentReady(event));
-        document.addEventListener('DOMContentLoaded', () => this.createChatSocket());
+        document.addEventListener('DOMContentLoaded', (event) => this.handleDocumentReady(event));
         window.addEventListener('beforeunload', (event) => this.onBeforeUnload(event));
+    }
+
+    /** Run document-ready setup exactly once, however late CHUCK initialised. */
+    handleDocumentReady(event: Event): void {
+        if (this.documentReadyHandled) return;
+        this.documentReadyHandled = true;
+        this.onDocumentReady(event);
+        this.createChatSocket();
     }
 
     onDocumentReady(_event: Event): void {
         this._debug('Document ready.');
     }
 
+    /**
+     * Zero this tab's count as it goes away, but only if it was reporting one:
+     * SNEED keys counts per channel, and a tab that never sent a count (a popout
+     * chat, a page with no stream) must not clobber the tab that did.
+     */
     onBeforeUnload(_event: BeforeUnloadEvent): void {
         this._debug('Window is about to unload.');
-        this.sendViewerCount(0);
+        if (this.viewers !== null && this.viewers > 0) {
+            this.sendViewerCount(0);
+        }
     }
 
     //
@@ -239,6 +273,16 @@ export class Seed {
 
         ws.chuck_socket = true;
         this.chatSocket = ws;
+
+        // A socket held on a permission prompt (Chrome's Local Network Access)
+        // stays CONNECTING forever without firing close, so give up and retry.
+        setTimeout(() => {
+            if (ws === this.chatSocket && ws.readyState === WebSocket.CONNECTING) {
+                this.warn('Chat socket still connecting after', CONNECT_TIMEOUT_MS / 1000, 's; retrying.');
+                try { ws.close(); } catch { /* ignore */ }
+                this.scheduleReconnect(ws);
+            }
+        }, CONNECT_TIMEOUT_MS);
 
         return this.chatSocket;
     }
@@ -271,9 +315,15 @@ export class Seed {
             for (const update of this.updateQueue) {
                 // Update the channel in case it was null when queued
                 update.channel = this.channel!;
+                for (const message of update.messages ?? []) {
+                    if (message.channel === null || message.channel === undefined) {
+                        message.channel = this.channel!;
+                    }
+                }
                 this.chatSocket!.send(JSON.stringify(update));
             }
             this.updateQueue = [];
+            this.queueOverflowWarned = false;
         }
     }
 
@@ -315,10 +365,15 @@ export class Seed {
     onChatSocketClose(ws: PatchedWebSocket, event: CloseEvent): void {
         this._debug('Chat socket closed.', event);
         // Only schedule reconnect if this is our current socket
+        this.scheduleReconnect(ws);
+    }
+
+    /** Drop `ws` as our socket and retry shortly, if it is still the current one. */
+    private scheduleReconnect(ws: PatchedWebSocket): void {
         if (ws === this.chatSocket) {
             this.chatSocket = null;
             if (this.chatSocketTimeout) clearTimeout(this.chatSocketTimeout);
-            this.chatSocketTimeout = setTimeout(() => this.createChatSocket(), 3000);
+            this.chatSocketTimeout = setTimeout(() => this.createChatSocket(), RECONNECT_DELAY_MS);
         }
     }
 
@@ -336,9 +391,28 @@ export class Seed {
 
         if (ws_open && seed_ready) {
             this.chatSocket!.send(JSON.stringify(update));
-        } else {
-            this.warn('Forcing messages to queue. Socket open:', ws_open, 'Seed ready:', seed_ready);
-            this.updateQueue.push(update);
+            return;
+        }
+
+        this._debug('Queueing update. Socket open:', ws_open, 'Seed ready:', seed_ready);
+
+        // Only the latest viewer count matters; replace a queued one rather than
+        // replaying every stale count on reconnect.
+        if (isViewersOnly(update)) {
+            const index = this.updateQueue.findIndex(isViewersOnly);
+            if (index >= 0) {
+                this.updateQueue.splice(index, 1);
+            }
+        }
+
+        this.updateQueue.push(update);
+
+        if (this.updateQueue.length > MAX_QUEUED_UPDATES) {
+            this.updateQueue.splice(0, this.updateQueue.length - MAX_QUEUED_UPDATES);
+            if (!this.queueOverflowWarned) {
+                this.queueOverflowWarned = true;
+                this.warn('Update queue full; dropping the oldest updates until the chat socket connects.');
+            }
         }
     }
 

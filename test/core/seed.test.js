@@ -47,7 +47,8 @@ vi.stubGlobal('document', {
 vi.stubGlobal('unsafeWindow', undefined);
 
 // Import after mocks are set up
-const { Seed } = await import('../../src/core/seed.js');
+const { Seed, CONNECT_TIMEOUT_MS, RECONNECT_DELAY_MS, MAX_QUEUED_UPDATES } = await import('../../src/core/seed.js');
+const await_imports = await import('../../src/core/message.js');
 
 describe('Seed Base Class', () => {
     describe('handleServerCommand', () => {
@@ -173,6 +174,125 @@ describe('Seed Base Class', () => {
             } finally {
                 window.WebSocket = original;
             }
+        });
+    });
+
+    describe('backend queue and lifecycle', () => {
+        const { LivestreamUpdate, ChatMessage } = await_imports;
+
+        function makeSeed({ open = false, channel = 'testchannel' } = {}) {
+            const seed = Object.create(Seed.prototype);
+            seed.platform = 'Test';
+            seed.channel = channel;
+            seed.namespace = 'test-namespace';
+            seed.viewers = null;
+            seed.updateQueue = [];
+            seed.chatMessageQueue = [];
+            seed.chatSocket = open ? { readyState: 1, send: vi.fn() } : null;
+            seed.log = vi.fn();
+            seed.warn = vi.fn();
+            seed._debug = vi.fn();
+            seed.recorder = { recordChatMessage: vi.fn() };
+            return seed;
+        }
+
+        function viewersUpdate(n) {
+            const update = new LivestreamUpdate('Test', 'testchannel');
+            update.viewers = n;
+            return update;
+        }
+
+        it('does not send 0 on unload from a tab that never reported viewers', () => {
+            const seed = makeSeed();
+            seed.sendViewerCount = vi.fn();
+            seed.onBeforeUnload({});
+            expect(seed.sendViewerCount).not.toHaveBeenCalled();
+        });
+
+        it('sends 0 on unload from a tab that was reporting viewers', () => {
+            const seed = makeSeed();
+            seed.viewers = 1234;
+            seed.sendViewerCount = vi.fn();
+            seed.onBeforeUnload({});
+            expect(seed.sendViewerCount).toHaveBeenCalledWith(0);
+        });
+
+        it('keeps only the latest queued viewer count', () => {
+            const seed = makeSeed();
+            seed.queueLivestreamUpdate(viewersUpdate(1));
+            const chat = new LivestreamUpdate('Test', 'testchannel');
+            chat.messages = [];
+            seed.queueLivestreamUpdate(chat);
+            seed.queueLivestreamUpdate(viewersUpdate(2));
+            seed.queueLivestreamUpdate(viewersUpdate(3));
+
+            expect(seed.updateQueue).toHaveLength(2);
+            expect(seed.updateQueue[0]).toBe(chat);
+            expect(seed.updateQueue[1].viewers).toBe(3);
+        });
+
+        it('caps the queue while the socket is down', () => {
+            const seed = makeSeed();
+            for (let i = 0; i < MAX_QUEUED_UPDATES + 50; i++) {
+                const update = new LivestreamUpdate('Test', 'testchannel');
+                update.removals = [String(i)];
+                seed.queueLivestreamUpdate(update);
+            }
+            expect(seed.updateQueue).toHaveLength(MAX_QUEUED_UPDATES);
+            expect(seed.updateQueue[0].removals).toEqual(['50']);
+            expect(seed.warn).toHaveBeenCalledTimes(1);
+        });
+
+        it('fills in null message channels when flushing', () => {
+            const seed = makeSeed({ channel: null });
+            const message = new ChatMessage('id-1', 'Test', null);
+            const update = new LivestreamUpdate('Test', null);
+            update.messages = [message];
+            seed.queueLivestreamUpdate(update);
+
+            seed.chatSocket = { readyState: 1, send: vi.fn() };
+            seed.setChannel('realchannel');
+
+            const sent = JSON.parse(seed.chatSocket.send.mock.calls[0][0]);
+            expect(sent.channel).toBe('realchannel');
+            expect(sent.messages[0].channel).toBe('realchannel');
+        });
+
+        it('retries a socket stuck connecting', () => {
+            vi.useFakeTimers();
+            const sockets = [];
+            const Stuck = class {
+                constructor() { this.readyState = 0; this.close = vi.fn(); sockets.push(this); }
+                addEventListener() {}
+            };
+            const original = window.WebSocket;
+            window.WebSocket = { oldWebSocket: Stuck };
+            try {
+                const seed = makeSeed();
+                seed.serverUrl = 'ws://127.0.0.2:1350/chat.ws';
+                seed.createChatSocket();
+                expect(sockets).toHaveLength(1);
+
+                vi.advanceTimersByTime(CONNECT_TIMEOUT_MS);
+                expect(sockets[0].close).toHaveBeenCalled();
+                expect(seed.chatSocket).toBeNull();
+
+                vi.advanceTimersByTime(RECONNECT_DELAY_MS);
+                expect(sockets).toHaveLength(2);
+            } finally {
+                window.WebSocket = original;
+                vi.useRealTimers();
+            }
+        });
+
+        it('runs document-ready setup only once', () => {
+            const seed = makeSeed();
+            seed.onDocumentReady = vi.fn();
+            seed.createChatSocket = vi.fn();
+            seed.handleDocumentReady({});
+            seed.handleDocumentReady({});
+            expect(seed.onDocumentReady).toHaveBeenCalledTimes(1);
+            expect(seed.createChatSocket).toHaveBeenCalledTimes(1);
         });
     });
 
