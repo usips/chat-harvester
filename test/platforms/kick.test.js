@@ -1268,6 +1268,36 @@ describe('Kick pinned gifts', () => {
         expect(kick.sendChatMessages).toHaveBeenCalledTimes(2);
     });
 
+    const deletedFrame = (channel, data) => JSON.stringify({
+        push: { channel, pub: { data: { event: 'KicksGiftedDeleted', data: JSON.stringify(data) } } },
+    });
+
+    it('removes a deleted gift and keeps it from coming back', () => {
+        const kick = makeSpyKick();
+        kick.channel_id = 57035257;
+        const id = pinnedResponse.data.pinned_gifts[0].gift_transaction_id;
+
+        feed(kick, deletedFrame('channel_57035257', { gifted_transaction_id: id }));
+
+        expect(kick.sendRemoveMessages).toHaveBeenCalledWith([id]);
+        expect(kick.recordWebSocketHandled).toHaveBeenCalled();
+        expect(kick.receivePinnedGifts(pinnedResponse)).toBe(0);
+        expect(kick.sendChatMessages).not.toHaveBeenCalled();
+    });
+
+    it('ignores gift deletions for other channels and without an id', () => {
+        const kick = makeSpyKick();
+        kick.channel_id = 57035257;
+
+        feed(kick, deletedFrame('channel_1', { gifted_transaction_id: 'e18fd3ca-ff0c-471c-a901-92e314a46b68' }));
+        expect(kick.recordWebSocketIgnored).toHaveBeenCalled();
+
+        feed(kick, deletedFrame('channel_57035257', { gift_transaction_id: 'not-a-uuid' }));
+        expect(kick.recordWebSocketUnhandled).toHaveBeenCalled();
+
+        expect(kick.sendRemoveMessages).not.toHaveBeenCalled();
+    });
+
     it('tolerates empty and malformed responses', () => {
         const kick = makeSpyKick();
         for (const body of [null, 'x', {}, { data: {} }, { data: { pinned_gifts: [] } }, { data: { pinned_gifts: [null, 3] } }, { data: { type: 'Bad Request' } }]) {

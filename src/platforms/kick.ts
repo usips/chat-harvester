@@ -84,6 +84,11 @@ interface KickKicksGiftedData {
     gift?: KickGift;
 }
 
+/** `KicksGiftedDeleted` on `channel_{id}`; note the field is spelled `gifted_`. */
+interface KickKicksGiftedDeletedData {
+    gifted_transaction_id?: string;
+}
+
 interface KickDeletedMessageData {
     message?: { id?: string };
     aiModerated?: boolean;
@@ -197,6 +202,7 @@ const EVENT = {
     GIFTED_SUBS_PREFIXED: 'App\\Events\\GiftedSubscriptionsEvent',
     SUBSCRIPTION_GIFTED: 'SubscriptionGifted',
     KICKS_GIFTED: 'KicksGifted',
+    KICKS_GIFTED_DELETED: 'KicksGiftedDeleted',
     LIVESTREAM_UPDATED: 'App\\Events\\LivestreamUpdated',
     UPDATED_LIVESTREAM: 'App\\Events\\UpdatedLiveStreamEvent',
 } as const;
@@ -551,6 +557,21 @@ export class Kick extends Seed {
                     return { status: 'ignored', reason: 'Kicks gift already sent (pinned-gifts recovery)' };
                 }
                 this.sendChatMessages([gift]);
+                return { status: 'handled', parsed: json };
+            }
+
+            case EVENT.KICKS_GIFTED_DELETED: {
+                if (!this.inScope(scope)) {
+                    return { status: 'ignored', reason: 'Event for another channel' };
+                }
+                const json = isRecord(data) ? data as KickKicksGiftedDeletedData : {};
+                const id = json.gifted_transaction_id;
+                if (!isUuid(id)) {
+                    return { status: 'unhandled', reason: 'KicksGiftedDeleted without gifted_transaction_id' };
+                }
+                // Gift ids are the transaction ids; a later pinned-gifts copy must not revive it.
+                this.markGiftSeen(id);
+                this.sendRemoveMessages([id]);
                 return { status: 'handled', parsed: json };
             }
 
