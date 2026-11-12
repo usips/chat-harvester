@@ -587,6 +587,98 @@ describe('YouTube Platform', () => {
             expect(messages[0].emojis[0][2]).toBe('UC_happy');
         });
 
+        it('writes custom emoji as their shortcut without padding', async () => {
+            const [message] = await youtube.prepareChatMessages([youtubeEvents.liveChatWithEmoji.addChatItemAction]);
+            expect(message.message).toBe('Hello :UC_happy: world!');
+            expect(message.emojis).toEqual([[':UC_happy:', 'https://example.com/emoji.png', 'UC_happy']]);
+        });
+
+        const author = {
+            authorName: { simpleText: '@Fan' },
+            authorPhoto: { thumbnails: [{ url: 'https://example.com/fan.jpg' }] },
+            authorExternalChannelId: 'UCFan', timestampUsec: '1768430825000000',
+        };
+        const item = (key, renderer) => ({ item: { [key]: renderer } });
+
+        it('writes standard emoji as the character itself', async () => {
+            const [message] = await youtube.prepareChatMessages([item('liveChatTextMessageRenderer', {
+                ...author, id: 'std-emoji',
+                message: { runs: [
+                    { text: 'gg' },
+                    { emoji: { emojiId: '🔥', shortcuts: [':fire:'], image: { thumbnails: [{ url: 'https://example.com/fire.svg' }] } } },
+                    { emoji: { emojiId: 'UCx/abc', isCustomEmoji: true, image: { thumbnails: [{ url: 'https://example.com/c.png' }] } } },
+                ] },
+            })]);
+            expect(message.message).toBe('gg🔥:UCx/abc:');
+            expect(message.emojis).toEqual([[':UCx/abc:', 'https://example.com/c.png', 'UCx/abc']]);
+        });
+
+        it('parses paid stickers', async () => {
+            const [message] = await youtube.prepareChatMessages([item('liveChatPaidStickerRenderer', {
+                ...author, id: 'sticker-1',
+                purchaseAmountText: { simpleText: 'CA$5.00' },
+                sticker: { thumbnails: [{ url: 'https://example.com/s.png' }],
+                    accessibility: { accessibilityData: { label: 'A dancing cat' } } },
+            })]);
+            expect(message.amount).toBe(5);
+            expect(message.currency).toBe('CAD');
+            expect(message.message).toBe('A dancing cat');
+            expect(message.username).toBe('@Fan');
+        });
+
+        it('parses new members and milestones', async () => {
+            const [joined, milestone, quiet] = await youtube.prepareChatMessages([
+                item('liveChatMembershipItemRenderer', {
+                    ...author, id: 'member-1', headerSubtext: { runs: [{ text: 'Welcome to ' }, { text: 'Channel' }, { text: '!' }] },
+                }),
+                item('liveChatMembershipItemRenderer', {
+                    ...author, id: 'member-2',
+                    headerPrimaryText: { runs: [{ text: 'Member for ' }, { text: '6' }, { text: ' months' }] },
+                    headerSubtext: { simpleText: 'Supporter' },
+                    message: { runs: [{ text: 'Half a year!' }] },
+                }),
+                item('liveChatMembershipItemRenderer', {
+                    ...author, id: 'member-3',
+                    headerPrimaryText: { runs: [{ text: 'Member for 2 months' }] },
+                }),
+            ]);
+            expect(joined.is_subscription).toBe(true);
+            expect(joined.message).toBe('Welcome to Channel!');
+            expect(milestone.message).toBe('Half a year!');
+            expect(quiet.message).toBe('Member for 2 months');
+            expect(joined.amount).toBe(0);
+        });
+
+        it('values gifted memberships at $5 each and recipients at 0', async () => {
+            const [gifter, announced, recipient, redeemed] = await youtube.prepareChatMessages([
+                item('liveChatMembershipGiftingEventRenderer', { ...author, id: 'gift-1', numGiftedMembers: 5 }),
+                item('liveChatSponsorshipsGiftPurchaseAnnouncementRenderer', {
+                    id: 'gift-2', timestampUsec: '1768430825000000', authorExternalChannelId: 'UCFan',
+                    header: { liveChatSponsorshipsHeaderRenderer: {
+                        authorName: { simpleText: '@Fan' }, authorPhoto: author.authorPhoto,
+                        primaryText: { runs: [{ text: 'Sent ' }, { text: '20' }, { text: ' Channel gift memberships' }] },
+                    } },
+                }),
+                item('liveChatGiftMembershipReceivedEventRenderer', { ...author, id: 'gift-3', numGiftedMembers: 5 }),
+                item('liveChatSponsorshipsGiftRedemptionAnnouncementRenderer', { ...author, id: 'gift-4' }),
+            ]);
+            expect([gifter.amount, gifter.currency]).toEqual([25, 'USD']);
+            expect(gifter.message).toBe('@Fan gifted 5 memberships!');
+            expect([announced.amount, announced.username]).toEqual([100, '@Fan']);
+            expect(recipient.amount).toBe(0);
+            expect(recipient.message).toBe('@Fan received a gifted membership!');
+            expect(redeemed.amount).toBe(0);
+        });
+
+        it('does not drop a batch over a gift without an author photo', async () => {
+            const messages = await youtube.prepareChatMessages([
+                item('liveChatMembershipGiftingEventRenderer', { id: 'gift-x', numGiftedMembers: 1 }),
+                youtubeEvents.liveChatTextMessage.addChatItemAction,
+            ]);
+            expect(messages).toHaveLength(2);
+            expect(messages[0].amount).toBe(5);
+        });
+
         it('should identify moderator badge', async () => {
             const action = youtubeEvents.liveChatWithBadges.addChatItemAction;
             const messages = await youtube.prepareChatMessages([action]);

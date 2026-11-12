@@ -50,7 +50,9 @@
               { "text": "Hello " },
               {
                 "emoji": {
-                  "emojiId": "UC_happy",
+                  "emojiId": "UCTestChannel/UC_happy",
+                  "shortcuts": [":UC_happy:"],
+                  "isCustomEmoji": true,
                   "image": {
                     "thumbnails": [{ "url": "https://example.com/emoji.png" }]
                   }

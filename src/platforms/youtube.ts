@@ -120,14 +120,38 @@ interface YTAuthorBadge {
 interface YTRun {
     text?: string;
     emoji?: {
+        /** The character itself for a standard emoji; "UC…/…" for a custom one. */
         emojiId: string;
+        /** e.g. [":_wave:", ":wave:"] */
+        shortcuts?: string[];
+        isCustomEmoji?: boolean;
         image?: {
             thumbnails?: YTThumbnail[];
         };
     };
 }
 
-interface YTRenderer {
+/** Text that YouTube sends either as `simpleText` or as `runs`. */
+interface YTText {
+    simpleText?: string;
+    runs?: { text?: string }[];
+}
+
+/** Fields every chat item may carry about its author. */
+interface YTItemBase {
+    id?: string;
+    authorName?: {
+        simpleText?: string;
+    };
+    authorPhoto?: {
+        thumbnails?: YTThumbnail[];
+    };
+    timestampUsec?: string;
+    authorExternalChannelId?: string;
+    authorBadges?: YTAuthorBadge[];
+}
+
+interface YTRenderer extends YTItemBase {
     id: string;
     authorName: {
         simpleText: string;
@@ -136,8 +160,6 @@ interface YTRenderer {
         thumbnails: YTThumbnail[];
     };
     timestampUsec: string;
-    authorExternalChannelId?: string;
-    authorBadges?: YTAuthorBadge[];
     message?: {
         runs?: YTRun[];
     };
@@ -153,27 +175,36 @@ interface YTPurchase {
     currency?: string;
 }
 
-interface YTGiftingEventRenderer {
-    id: string;
-    authorName: {
-        simpleText: string;
+interface YTPaidStickerRenderer extends YTItemBase, YTPurchase {
+    sticker?: {
+        thumbnails?: YTThumbnail[];
+        accessibility?: { accessibilityData?: { label?: string } };
     };
-    authorPhoto: {
-        thumbnails: YTThumbnail[];
-    };
-    timestampUsec: string;
-    numGiftedMembers: number;
 }
 
-interface YTGiftReceivedRenderer {
-    id: string;
-    authorName: {
-        simpleText: string;
+/** New member ("Welcome to …") or a membership milestone ("Member for 6 months"). */
+interface YTMembershipItemRenderer extends YTItemBase {
+    headerPrimaryText?: YTText;
+    headerSubtext?: YTText;
+    message?: {
+        runs?: YTRun[];
     };
-    authorPhoto: {
-        thumbnails: YTThumbnail[];
+}
+
+interface YTGiftingEventRenderer extends YTItemBase {
+    numGiftedMembers?: number;
+}
+
+/** A gift purchase: the gifter is in the header, "Sent 5 … gift memberships" in primaryText. */
+interface YTGiftPurchaseRenderer extends YTItemBase {
+    header?: {
+        liveChatSponsorshipsHeaderRenderer?: YTItemBase & {
+            primaryText?: YTText;
+        };
     };
-    timestampUsec: string;
+}
+
+interface YTGiftReceivedRenderer extends YTItemBase {
     numGiftedMembers?: number;
 }
 
@@ -186,8 +217,12 @@ interface YTAction {
     item?: {
         liveChatTextMessageRenderer?: YTRenderer;
         liveChatPaidMessageRenderer?: YTRenderer & YTPurchase;
+        liveChatPaidStickerRenderer?: YTPaidStickerRenderer;
+        liveChatMembershipItemRenderer?: YTMembershipItemRenderer;
         liveChatMembershipGiftingEventRenderer?: YTGiftingEventRenderer;
+        liveChatSponsorshipsGiftPurchaseAnnouncementRenderer?: YTGiftPurchaseRenderer;
         liveChatGiftMembershipReceivedEventRenderer?: YTGiftReceivedRenderer;
+        liveChatSponsorshipsGiftRedemptionAnnouncementRenderer?: YTGiftReceivedRenderer;
         liveChatPlaceholderItemRenderer?: YTPlaceholderRenderer;
     };
     addChatItemAction?: YTAction;
@@ -224,6 +259,33 @@ const YT_IGNORED_ACTIONS = [
     'showLiveChatActionPanelAction',
     'closeLiveChatActionPanelAction',
 ];
+
+/** Value of one gifted membership; YouTube does not say what the gifter paid. */
+const GIFT_MEMBERSHIP_USD = 5.00;
+
+function hasBadge(badges: YTAuthorBadge[] | undefined, iconType: string): boolean {
+    return Array.isArray(badges) && badges.some(badge =>
+        badge?.liveChatAuthorBadgeRenderer?.icon?.iconType === iconType
+    );
+}
+
+/** Channel members wear the channel's own badge image. */
+function isMember(badges: YTAuthorBadge[] | undefined): boolean {
+    return Array.isArray(badges) && badges.some(badge =>
+        badge?.liveChatAuthorBadgeRenderer?.customThumbnail !== undefined
+    );
+}
+
+function textOf(text: YTText | undefined): string {
+    if (!text) return '';
+    if (typeof text.simpleText === 'string') return text.simpleText;
+    return Array.isArray(text.runs) ? text.runs.map(run => run?.text ?? '').join('') : '';
+}
+
+function positiveInt(value: unknown): number | null {
+    const n = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
+    return Number.isInteger(n) && n > 0 ? n : null;
+}
 
 /** Bounds for the author → message ids map used by "remove by author" actions. */
 const MAX_TRACKED_AUTHORS = 2000;
@@ -489,106 +551,158 @@ export class YouTube extends Seed {
         message.currency = parsed.currency;
     }
 
+    /**
+     * A message carrying an item's id, author and timestamp; null when the item lacks
+     * an id. A missing author or photo keeps ChatMessage's defaults.
+     */
+    private _baseMessage(renderer: YTItemBase | undefined): ChatMessage | null {
+        if (!renderer?.id) return null;
+
+        const message = new ChatMessage(uuidv5(renderer.id, this.namespace!), this.platform!, this.channel!);
+        const author = renderer.authorName?.simpleText;
+        if (author) message.username = author;
+        const avatar = renderer.authorPhoto?.thumbnails?.at(-1)?.url;
+        if (avatar) message.avatar = avatar;
+        const usec = parseInt(renderer.timestampUsec ?? '', 10);
+        if (Number.isFinite(usec)) message.sent_at = Math.floor(usec / 1000);
+
+        const badges = renderer.authorBadges;
+        message.is_verified = hasBadge(badges, 'VERIFIED');
+        message.is_sub = isMember(badges);
+        message.is_mod = hasBadge(badges, 'MODERATOR');
+        message.is_owner = hasBadge(badges, 'OWNER');
+
+        this.trackAuthorMessage(renderer.authorExternalChannelId, message.id);
+        return message;
+    }
+
+    /**
+     * Append message runs as text. A standard emoji is its own character; a custom
+     * emoji becomes its shortcut (":_name:") and an emoji entry with its image.
+     */
+    private _appendRuns(message: ChatMessage, runs: YTRun[] | undefined): void {
+        if (!Array.isArray(runs)) return;
+
+        for (const run of runs) {
+            if (run?.text !== undefined) {
+                message.message += run.text;
+            } else if (run?.emoji !== undefined) {
+                const emoji = run.emoji;
+                const emojiId = String(emoji.emojiId ?? '');
+                const custom = emoji.isCustomEmoji === true || emojiId.includes('/');
+                if (!custom) {
+                    message.message += emojiId;
+                    continue;
+                }
+                const token = emoji.shortcuts?.find(s => typeof s === 'string' && s.length > 0) ?? `:${emojiId}:`;
+                const url = emoji.image?.thumbnails?.at(-1)?.url || '';
+                message.message += token;
+                message.emojis.push([token, url, token.replace(/^:|:$/g, '')]);
+            } else {
+                this.log('[CHUCK::YouTube] Unknown run.', run);
+            }
+        }
+    }
+
     prepareChatMessages(actions: YTAction[]): Promise<ChatMessage[]> {
-        function hasBadge(badges: YTAuthorBadge[] | undefined, iconType: string): boolean {
-            return badges?.some(badge =>
-                badge.liveChatAuthorBadgeRenderer?.icon?.iconType === iconType
-            ) ?? false;
-        }
-
-        function isMember(badges: YTAuthorBadge[] | undefined): boolean {
-            return badges?.some(badge => {
-                return badge.liveChatAuthorBadgeRenderer?.customThumbnail !== undefined;
-            }) ?? false;
-        }
-
         return Promise.all(actions.map(async (action) => {
-            if (!action?.item) {
+            const item = action?.item;
+            if (!item) {
                 return null;
             }
-            if (action.item.liveChatTextMessageRenderer !== undefined || action.item.liveChatPaidMessageRenderer !== undefined) {
-                const renderer = action.item.liveChatTextMessageRenderer || action.item.liveChatPaidMessageRenderer;
-                if (!renderer!.id || !renderer!.authorName || !renderer!.authorPhoto?.thumbnails?.length) {
+
+            if (item.liveChatTextMessageRenderer !== undefined || item.liveChatPaidMessageRenderer !== undefined) {
+                const renderer = item.liveChatTextMessageRenderer || item.liveChatPaidMessageRenderer;
+                if (!renderer?.id || !renderer.authorName || !renderer.authorPhoto?.thumbnails?.length) {
                     return null; // Skip malformed messages
                 }
-                const message = new ChatMessage(
-                    uuidv5(renderer!.id, this.namespace!),
-                    this.platform!,
-                    this.channel!
-                );
-                message.username = renderer!.authorName.simpleText;
-                message.avatar = renderer!.authorPhoto.thumbnails.at(-1)!.url;
-                message.sent_at = Math.floor(parseInt(renderer!.timestampUsec) / 1000);
-                this.trackAuthorMessage(renderer!.authorExternalChannelId, message.id);
-
-                const badges = renderer!.authorBadges;
-                message.is_verified = hasBadge(badges, 'VERIFIED');
-                message.is_sub = isMember(badges);
-                message.is_mod = hasBadge(badges, 'MODERATOR');
-                message.is_owner = hasBadge(badges, 'OWNER');
-
-                if (action.item.liveChatPaidMessageRenderer !== undefined) {
-                    this.applyPurchase(message, action.item.liveChatPaidMessageRenderer);
+                const message = this._baseMessage(renderer)!;
+                if (item.liveChatPaidMessageRenderer !== undefined) {
+                    this.applyPurchase(message, item.liveChatPaidMessageRenderer);
                 }
+                this._appendRuns(message, renderer.message?.runs);
+                return message;
+            }
 
-                if (renderer!.message && renderer!.message.runs) {
-                    renderer!.message.runs.forEach((run) => {
-                        if (run.text !== undefined) {
-                            message.message += run.text;
-                        } else if (run.emoji !== undefined) {
-                            const emojiUrl = run.emoji.image?.thumbnails?.at(-1)?.url || '';
-                            message.message += `:${run.emoji.emojiId}: `;
-                            message.emojis.push([`:${run.emoji.emojiId}:`, emojiUrl, `${run.emoji.emojiId}`]);
-                        } else {
-                            this.log('[CHUCK::YouTube] Unknown run.', run);
-                        }
-                    });
+            if (item.liveChatPaidStickerRenderer !== undefined) {
+                const sticker = item.liveChatPaidStickerRenderer;
+                const message = this._baseMessage(sticker);
+                if (!message) return null;
+                this.applyPurchase(message, sticker);
+                message.message = sticker.sticker?.accessibility?.accessibilityData?.label ?? '';
+                return message;
+            }
+
+            if (item.liveChatMembershipItemRenderer !== undefined) {
+                const membership = item.liveChatMembershipItemRenderer;
+                const message = this._baseMessage(membership);
+                if (!message) return null;
+                message.is_subscription = true;
+                message.is_sub = true;
+                // A milestone may carry the member's own message; otherwise use YouTube's header.
+                if (membership.message?.runs?.length) {
+                    this._appendRuns(message, membership.message.runs);
+                } else {
+                    message.message = textOf(membership.headerPrimaryText) || textOf(membership.headerSubtext);
                 }
-
                 return message;
-            } else if (action.item.liveChatMembershipGiftingEventRenderer !== undefined) {
-                const giftingEvent = action.item.liveChatMembershipGiftingEventRenderer;
+            }
+
+            if (item.liveChatMembershipGiftingEventRenderer !== undefined) {
+                const giftingEvent = item.liveChatMembershipGiftingEventRenderer;
+                const message = this._baseMessage(giftingEvent);
+                if (!message) return null;
+                const count = positiveInt(giftingEvent.numGiftedMembers) ?? 1;
+                return this._giftPurchase(message, count);
+            }
+
+            if (item.liveChatSponsorshipsGiftPurchaseAnnouncementRenderer !== undefined) {
+                const purchase = item.liveChatSponsorshipsGiftPurchaseAnnouncementRenderer;
+                const header = purchase.header?.liveChatSponsorshipsHeaderRenderer;
+                const message = this._baseMessage({ ...header, ...purchase });
+                if (!message) return null;
+                const count = positiveInt(textOf(header?.primaryText).match(/\d[\d,.]*/)?.[0]?.replace(/\D/g, '')) ?? 1;
+                return this._giftPurchase(message, count);
+            }
+
+            if (item.liveChatGiftMembershipReceivedEventRenderer !== undefined
+                || item.liveChatSponsorshipsGiftRedemptionAnnouncementRenderer !== undefined) {
+                // The recipient's notice is not a payment: the gifter's event carries the amount.
+                const received = item.liveChatGiftMembershipReceivedEventRenderer
+                    ?? item.liveChatSponsorshipsGiftRedemptionAnnouncementRenderer!;
+                const message = this._baseMessage(received);
+                if (!message) return null;
+                message.is_sub = true;
+                message.message = `${message.username} received a gifted membership!`;
+                return message;
+            }
+
+            if (item.liveChatPlaceholderItemRenderer !== undefined) {
+                const placeholder = item.liveChatPlaceholderItemRenderer;
+                if (!placeholder.id) return null;
                 const message = new ChatMessage(
-                    uuidv5(giftingEvent.id, this.namespace!),
+                    uuidv5(placeholder.id, this.namespace!),
                     this.platform!,
                     this.channel!
                 );
-                message.username = giftingEvent.authorName.simpleText;
-                message.avatar = giftingEvent.authorPhoto.thumbnails.at(-1)!.url;
-                message.sent_at = Math.floor(parseInt(giftingEvent.timestampUsec) / 1000);
-                message.message = `${giftingEvent.authorName.simpleText} gifted ${giftingEvent.numGiftedMembers} memberships!`;
-                message.currency = 'USD';
-                message.amount = 5.00;
-
-                return message;
-            } else if (action.item.liveChatGiftMembershipReceivedEventRenderer !== undefined) {
-                const giftReceivedEvent = action.item.liveChatGiftMembershipReceivedEventRenderer;
-                const message = new ChatMessage(
-                    uuidv5(giftReceivedEvent.id, this.namespace!),
-                    this.platform!,
-                    this.channel!
-                );
-                message.username = giftReceivedEvent.authorName.simpleText;
-                message.avatar = giftReceivedEvent.authorPhoto.thumbnails.at(-1)!.url;
-                message.sent_at = Math.floor(parseInt(giftReceivedEvent.timestampUsec) / 1000);
-                message.message = `${giftReceivedEvent.authorName.simpleText} received a gifted membership!`;
-                message.currency = 'USD';
-                message.amount = (giftReceivedEvent.numGiftedMembers ?? 1) * 5.00;
-
-                return message;
-            } else if (action.item.liveChatPlaceholderItemRenderer !== undefined) {
-                const message = new ChatMessage(
-                    uuidv5(action.item.liveChatPlaceholderItemRenderer.id, this.namespace!),
-                    this.platform!,
-                    this.channel!
-                );
-                message.sent_at = Math.floor(parseInt(action.item.liveChatPlaceholderItemRenderer.timestampUsec) / 1000);
+                message.sent_at = Math.floor(parseInt(placeholder.timestampUsec) / 1000);
                 message.is_placeholder = true;
                 return message;
-            } else {
-                return null;
             }
+
+            return null;
         })).then((messages) => messages.filter((message): message is ChatMessage => message !== null));
+    }
+
+    /** A gifter's message: `count` memberships at the $5 unit price. */
+    private _giftPurchase(message: ChatMessage, count: number): ChatMessage {
+        message.is_subscription = true;
+        message.message = count === 1
+            ? `${message.username} gifted a membership!`
+            : `${message.username} gifted ${count} memberships!`;
+        message.currency = 'USD';
+        message.amount = count * GIFT_MEMBERSHIP_USD;
+        return message;
     }
 
     receiveChatMessages(json: YTAction[]): Promise<void> {
