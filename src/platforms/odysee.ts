@@ -10,7 +10,7 @@
  * - Capture fiat superchats
  */
 
-import { Seed, ChatMessage, uuidv5, EventStatus, PatchedWebSocket } from '../core/index.js';
+import { Seed, ChatMessage, uuidv5, EventStatus, PatchedWebSocket, parseUrl } from '../core/index.js';
 
 interface OdyseeComment {
     comment_id: string;
@@ -94,7 +94,11 @@ export class Odysee extends Seed {
 
     async onFetchResponse(response: Response): Promise<void> {
         try {
-            const url = new URL(response.url);
+            const url = parseUrl(response.url);
+            if (url === null) {
+                this.recordFetchIgnored(response.url, 'GET', response.status, 'Response has no URL');
+                return;
+            }
             const method = url.searchParams.get('m');
             switch (method) {
                 case 'comment.List':
