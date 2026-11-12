@@ -358,6 +358,21 @@ describe('Kick dispatch', () => {
         expect(sub.value).toBe(5);
     });
 
+    it('gives a repeated subscription event the same id', () => {
+        const frame = data => JSON.stringify({ event: 'App\\Events\\SubscriptionEvent', data: JSON.stringify(data), channel: 'chatrooms.1.v2' });
+        const withTime = { username: 'feepsyy', months: 2, created_at: '2026-11-12T10:00:00Z' };
+        feed(kick, frame(withTime));
+        feed(kick, frame(withTime));
+        feed(kick, frame({ ...withTime, id: 'abc' }));
+        feed(kick, frame({ ...withTime, id: 'abc', created_at: '2026-11-12T10:00:01Z' }));
+
+        const ids = kick.receiveSubscriptions.mock.calls.map(([sub]) => sub.id);
+        expect(ids[0]).toBe('subscription:feepsyy:2:2026-11-12T10:00:00Z');
+        expect(ids[1]).toBe(ids[0]);
+        expect(ids[2]).toBe('subscription:abc');
+        expect(ids[3]).toBe(ids[2]);
+    });
+
     it('sends a Kicks gift', () => {
         feed(kick, kickEvents.centrifugo.kicksGifted);
 
@@ -721,6 +736,22 @@ describe('Kick HTTP intercept', () => {
         expect(kick.sendViewerCount).toHaveBeenCalledWith(4321);
     });
 
+    it('ignores /current-viewers until our livestream is known', async () => {
+        const kick = makeSpyKick();
+        kick.recordFetchHandled = vi.fn();
+
+        await kick.onFetchResponse(jsonResponse('https://kick.com/current-viewers?ids[]=12', [
+            { livestream_id: 12, viewers: 5 },
+        ]));
+
+        expect(kick.sendViewerCount).not.toHaveBeenCalled();
+    });
+
+    it('accepts v7 UUIDs as native message ids', () => {
+        const kick = makeSpyKick();
+        expect(kick.messageId('01a1d052-ae90-7df7-92ea-b39fe804c714')).toBe('01a1d052-ae90-7df7-92ea-b39fe804c714');
+    });
+
     it('learns ids and viewers from channel info', async () => {
         const kick = makeSpyKick();
         kick.recordFetchHandled = vi.fn();
@@ -1020,6 +1051,17 @@ describe('Kick viewer polling', () => {
         await kick.fetchChannelInfo();
         expect(kick.sendViewerCount).toHaveBeenCalledTimes(1);
         expect(kick.sendViewerCount).toHaveBeenCalledWith(0);
+    });
+
+    it('does nothing without a channel (home page)', async () => {
+        const kick = makeSpyKick();
+        kick.channel = null;
+        fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+        await kick.pollViewers();
+        await kick.fetchChatHistory();
+
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('logs rather than throws when the poll fails', async () => {

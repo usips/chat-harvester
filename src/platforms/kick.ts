@@ -116,8 +116,10 @@ interface KickGiftedSubsModern {
 }
 
 interface KickSubscriptionData {
+    id?: string | number;
     username?: string;
     months?: number;
+    created_at?: string;
 }
 
 interface KickLivestreamUpdatedData {
@@ -386,7 +388,8 @@ export class Kick extends Seed {
 
     constructor() {
         super(Kick.namespace, 'Kick', channelSlugFromPath(window.location.pathname)!);
-        void this.fetchChatHistory();
+        // The home page has no channel; a later client-side navigation bootstraps one.
+        if (this.channel !== null) void this.fetchChatHistory();
         setInterval(() => void this.pollViewers(), VIEWER_POLL_MS);
     }
 
@@ -556,8 +559,13 @@ export class Kick extends Seed {
                     return { status: 'unhandled', reason: 'SubscriptionEvent without username' };
                 }
                 const months = toFiniteNumber(json.months) ?? 1;
+                // A stable id lets SNEED drop a repeated delivery; the clock is the last resort.
+                const hasId = (typeof json.id === 'string' && json.id.length > 0) || typeof json.id === 'number';
+                const id = hasId
+                    ? `subscription:${json.id}`
+                    : `subscription:${json.username}:${months}:${typeof json.created_at === 'string' ? json.created_at : Date.now()}`;
                 this.receiveSubscriptions({
-                    id: `subscription:${json.username}:${months}:${Date.now()}`,
+                    id,
                     gifted: false,
                     buyer: json.username,
                     count: months,
@@ -870,6 +878,9 @@ export class Kick extends Seed {
      * While live, also learns the livestream UUID the viewer-count endpoint needs.
      */
     async fetchChannelInfo(): Promise<boolean> {
+        // Without a slug this would request `/api/v2/channels/null`.
+        if (this.channel === null) return false;
+
         try {
             const response = await fetch(`https://kick.com/api/v2/channels/${this.channel}`);
             this.applyChannelInfo(await response.json() as KickChannelInfo);
@@ -1046,12 +1057,15 @@ export class Kick extends Seed {
 
     /** Apply a `/current-viewers` payload; returns the count sent, or null if none was ours. */
     receiveCurrentViewers(json: unknown): number | null {
+        // Without our own livestream id every entry belongs to someone else
+        // (sidebar and featured streams are polled through the same endpoint).
+        if (this.livestream_id === null) return null;
+
         const entries = Array.isArray(json) ? json as KickViewersEntry[] : [];
         for (const entry of entries) {
             const viewers = toFiniteNumber(entry?.viewers);
             if (viewers === null) continue;
-            // With a known livestream, only its own count is ours.
-            if (this.livestream_id !== null && toFiniteNumber(entry?.livestream_id) !== this.livestream_id) continue;
+            if (toFiniteNumber(entry?.livestream_id) !== this.livestream_id) continue;
             this.sendViewerCount(viewers);
             return viewers;
         }
