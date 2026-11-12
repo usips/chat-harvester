@@ -7,6 +7,8 @@ export { Config, DEFAULTS } from './config.js';
 export type { ChuckConfig, PlatformConfig } from './config.js';
 export { uuidv5 } from './uuid.js';
 export { parseUrl } from './url.js';
+export { parseAmount, parseLocalizedNumber } from './currency.js';
+export type { ParsedAmount } from './currency.js';
 export { ChatMessage, LivestreamUpdate } from './message.js';
 export type { EmojiTuple } from './message.js';
 export { Seed, WINDOW } from './seed.js';
