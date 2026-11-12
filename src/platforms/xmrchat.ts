@@ -51,7 +51,11 @@ const LOCALES: ReadonlySet<string> = new Set(['en', 'fr', 'es', 'de', 'ru', 'fi'
 const RESERVED_PATHS: ReadonlySet<string> = new Set([
     'streamer', 'auth', 'admin', 'obs', 'creators', 'faq', 'terms', 'privacy',
     'accept-invitation', 'reset-password', 'login', 'signup', 'images', 'thumbnails', '_nuxt',
+    'contact', 'creator', 'ads', 'guides', 'sitemap.xml',
 ]);
+
+/** Delay before retrying a failed on-load tips request. */
+export const TIPS_RETRY_MS = 10_000;
 
 /** Streamer slug of a public page path (`/monerotalk`, `/fr/monerotalk`), else null. */
 export function streamerSlugFromPath(pathname: string): string | null {
@@ -117,18 +121,27 @@ export class XMRChat extends Seed {
         }
     }
 
-    /** Load a streamer's tips on page load instead of waiting for the site's next poll. */
-    async fetchTips(slug: string): Promise<void> {
+    /**
+     * Load a streamer's tips on page load instead of waiting for the site's next
+     * poll. A 404 means the path is not a streamer page, so the channel is
+     * dropped; any other failure is retried once.
+     */
+    async fetchTips(slug: string, retry = true): Promise<void> {
         try {
             const response = await fetch(`${API_BASE}/tips/page/${encodeURIComponent(slug)}`);
-            if (!response.ok) {
-                this.warn(`Tips request failed with HTTP ${response.status}.`);
+            if (response.status === 404) {
+                this.log(`No XMRChat page "${slug}"; not a streamer page.`);
+                if (this.channel === slug) this.channel = null;
                 return;
+            }
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
             }
             const sent = await this.receiveTips(await response.json(), slug);
             this.log(`Loaded tips on page load; sent ${sent}.`);
         } catch (error) {
-            this.error('Failed to fetch tips.', error);
+            this.warn('Failed to fetch tips.', error);
+            if (retry) setTimeout(() => void this.fetchTips(slug, false), TIPS_RETRY_MS);
         }
     }
 
@@ -195,6 +208,11 @@ export class XMRChat extends Seed {
         const slug = slugFromTipsUrl(xhr.responseURL);
         if (slug === null) {
             this.recorder.recordXhr(xhr.responseURL, 'GET', xhr.status, null, EventStatus.IGNORED, null, 'Not tips endpoint');
+            return;
+        }
+
+        if (xhr.status < 200 || xhr.status >= 300) {
+            this.recorder.recordXhr(xhr.responseURL, 'GET', xhr.status, null, EventStatus.IGNORED, null, `HTTP ${xhr.status}`);
             return;
         }
 

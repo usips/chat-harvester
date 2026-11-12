@@ -113,7 +113,7 @@ describe('XMRChat Platform', () => {
     });
 });
 
-const { streamerSlugFromPath, slugFromTipsUrl, RECENT_TIP_WINDOW_MS } = await import('../../src/platforms/xmrchat.js');
+const { streamerSlugFromPath, slugFromTipsUrl, RECENT_TIP_WINDOW_MS, TIPS_RETRY_MS } = await import('../../src/platforms/xmrchat.js');
 const { uuidv5 } = await import('../../src/core/uuid.js');
 
 /** An XMRChat instance with no constructor side effects and observable outputs. */
@@ -146,7 +146,8 @@ describe('XMRChat page detection', () => {
     });
 
     it('returns null for site routes', () => {
-        for (const path of ['/', '/streamer', '/streamer/obs', '/auth/login', '/de/streamer', '/admin/pages/x', '/fr']) {
+        for (const path of ['/', '/streamer', '/streamer/obs', '/auth/login', '/de/streamer', '/admin/pages/x', '/fr',
+            '/contact', '/creator', '/ads/create', '/guides/obs', '/sitemap.xml']) {
             expect(streamerSlugFromPath(path)).toBeNull();
         }
     });
@@ -299,5 +300,45 @@ describe('XMRChat transport', () => {
         await expect(x.fetchTips('monerotalk')).resolves.toBeUndefined();
         await expect(x.fetchPrice()).resolves.toBeUndefined();
         expect(x.xmrPrice).toBe(200);
+    });
+
+    it('retries a failed on-load tips request once', async () => {
+        vi.useFakeTimers({ now: new Date('2026-09-05T20:00:00Z') });
+        const x = makeXmr();
+        const fetchSpy = vi.fn()
+            .mockResolvedValueOnce({ ok: false, status: 429, json: () => Promise.resolve({}) })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(realTips()) });
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await x.fetchTips('monerotalk');
+        expect(x.sendChatMessages).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(TIPS_RETRY_MS);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+        expect(x.sendChatMessages).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(TIPS_RETRY_MS * 2);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops the channel when the path is not a streamer page', async () => {
+        const x = makeXmr({ channel: 'somepage' });
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })));
+
+        await x.fetchTips('somepage');
+
+        expect(x.channel).toBeNull();
+        expect(x.sendChatMessages).not.toHaveBeenCalled();
+    });
+
+    it('records a non-2xx tips poll as ignored', () => {
+        const x = makeXmr();
+        x.receiveTips = vi.fn();
+        x.onXhrReadyStateChange({ ...xhr('https://nest.xmrchat.com/tips/page/monerotalk', '{}'), status: 429 }, {});
+
+        expect(x.receiveTips).not.toHaveBeenCalled();
+        expect(x.recorder.recordXhr).toHaveBeenCalledWith(
+            'https://nest.xmrchat.com/tips/page/monerotalk', 'GET', 429, null, 'ignored', null, 'HTTP 429'
+        );
     });
 });
