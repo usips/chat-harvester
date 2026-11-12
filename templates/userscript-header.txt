@@ -20,12 +20,8 @@
 // @match https://twitch.tv/popout/*/chat
 // @match https://www.twitch.tv/*
 // @match https://www.twitch.tv/popout/*/chat
-// @match https://www.youtube.com/watch?v=*
-// @match https://youtube.com/watch?v=*
-// @match https://www.youtube.com/live/*
-// @match https://youtube.com/live/*
-// @match https://www.youtube.com/live_chat?*
-// @match https://youtube.com/live_chat?*
+// @match https://www.youtube.com/*
+// @match https://youtube.com/*
 // @match https://vk.com/video/lives?z=*
 // @match https://twitter.com/i/broadcasts/*
 // @match https://x.com/i/broadcasts/*

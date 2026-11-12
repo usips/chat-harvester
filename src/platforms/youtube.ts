@@ -21,6 +21,7 @@ interface YTWindow extends Window {
 /** The fields of `ytInitialPlayerResponse` that say whether a video is live right now. */
 interface YTPlayerResponse {
     videoDetails?: {
+        videoId?: string;
         isLive?: boolean;
         isLiveContent?: boolean;
     };
@@ -31,6 +32,19 @@ interface YTPlayerResponse {
             };
         };
     };
+}
+
+/** `detail` of the `yt-navigate-finish` event YouTube fires after an SPA navigation. */
+interface YTNavigateDetail {
+    pageType?: string;
+    response?: {
+        playerResponse?: YTPlayerResponse;
+    };
+}
+
+/** The `#movie_player` element, which exposes the current video's player response. */
+interface YTPlayerElement extends Element {
+    getPlayerResponse?: () => YTPlayerResponse | null | undefined;
 }
 
 /** YouTube's view-count block, shared by the watch page and `updated_metadata`. */
@@ -272,6 +286,9 @@ export class YouTube extends Seed {
      * platform, so only a live tab may send or clear YouTube's count.
      */
     liveState: boolean | null = null;
+
+    /** The video this tab is on (watch page or chat frame); null on pages without one. */
+    videoId: string | null = null;
 
     /** Record a live-state change; a stream that ends in this tab clears SNEED's count once. */
     setLiveState(live: boolean | null, source: string): void {
@@ -542,64 +559,103 @@ export class YouTube extends Seed {
         });
     }
 
+    bindEvents(): void {
+        super.bindEvents();
+        // YouTube is a single-page app: moving between videos fires this instead of a load.
+        document.addEventListener('yt-navigate-finish', (event) => {
+            void this.onNavigateFinish(event as CustomEvent<YTNavigateDetail>);
+        });
+    }
+
     async onDocumentReady(_event: Event): Promise<void> {
         this.log('Document ready, preparing to load channel information.');
 
         const url = new URL(window.location.href);
-        const yt = (WINDOW as unknown as YTWindow).ytInitialData;
-        let video_id: string | null = null;
-        let is_chat_only = false;
 
-        if (url.pathname.includes('/live_chat') || url.pathname.includes('/live_chat_replay')) {
-            is_chat_only = true;
-            video_id = url.searchParams.get('v');
-
-            if (!video_id && yt?.continuationContents?.liveChatContinuation) {
-                const chatContinuation = yt.continuationContents.liveChatContinuation;
-                const menuItems = chatContinuation.header?.liveChatHeaderRenderer?.overflowMenu?.menuRenderer?.items || [];
-                for (const item of menuItems) {
-                    const endpoint = item.menuServiceItemRenderer?.serviceEndpoint?.popoutLiveChatEndpoint;
-                    if (endpoint?.url) {
-                        const popoutUrl = new URL(endpoint.url);
-                        video_id = popoutUrl.searchParams.get('v');
-                        if (video_id) break;
-                    }
-                }
-
-                if (!video_id) {
-                    const topic = chatContinuation.continuations?.[0]?.invalidationContinuationData?.invalidationId?.topic;
-                    if (topic) video_id = topic.split('~')[1];
-                }
-            } else if (!video_id && yt?.contents?.liveChatRenderer) {
-                const topic = yt.contents.liveChatRenderer.continuations?.[0]?.invalidationContinuationData?.invalidationId?.topic;
-                if (topic) video_id = topic.split('~')[1];
+        if (url.pathname.includes('/live_chat')) {
+            const video_id = this._chatVideoId(url);
+            if (!video_id) {
+                this.log('Cannot identify video ID.', { url: url.href, pathname: url.pathname });
+                return;
             }
-        } else {
-            if (url.pathname.startsWith('/watch')) {
-                video_id = url.searchParams.get('v');
-            } else if (url.pathname.startsWith('/live/')) {
-                // /live/VIDEO_ID or /live/VIDEO_ID?feature=share
-                const pathPart = url.pathname.split('/live/')[1];
-                video_id = pathPart ? pathPart.split('/')[0].split('?')[0] : null;
-            }
-        }
-
-        if (!video_id) {
-            this.log('Cannot identify video ID.', { url: url.href, pathname: url.pathname });
+            this.log('Video ID:', video_id, 'Chat only:', true);
+            await this.applyVideo(video_id, null, true);
             return;
         }
 
-        this.log('Video ID:', video_id, 'Chat only:', is_chat_only);
+        const video_id = YouTube._extractVideoIdFromUrl();
+        if (!video_id) {
+            // Home, search, a channel page...: nothing to report until a video opens.
+            this.log('Not a video page.', { url: url.href, pathname: url.pathname });
+            this.liveState = false;
+            return;
+        }
 
-        if (!is_chat_only) {
-            this.setLiveState(liveStateFromPlayerResponse((WINDOW as YTWindow).ytInitialPlayerResponse), 'page');
+        this.log('Video ID:', video_id, 'Chat only:', false);
+        await this.applyVideo(video_id, (WINDOW as YTWindow).ytInitialPlayerResponse ?? null);
+    }
+
+    /** The video id of a `live_chat` / `live_chat_replay` frame. */
+    private _chatVideoId(url: URL): string | null {
+        const yt = (WINDOW as unknown as YTWindow).ytInitialData;
+        let video_id = url.searchParams.get('v');
+
+        if (!video_id && yt?.continuationContents?.liveChatContinuation) {
+            const chatContinuation = yt.continuationContents.liveChatContinuation;
+            const menuItems = chatContinuation.header?.liveChatHeaderRenderer?.overflowMenu?.menuRenderer?.items || [];
+            for (const item of menuItems) {
+                const endpoint = item.menuServiceItemRenderer?.serviceEndpoint?.popoutLiveChatEndpoint;
+                if (endpoint?.url) {
+                    const popoutUrl = new URL(endpoint.url);
+                    video_id = popoutUrl.searchParams.get('v');
+                    if (video_id) break;
+                }
+            }
+
+            if (!video_id) {
+                const topic = chatContinuation.continuations?.[0]?.invalidationContinuationData?.invalidationId?.topic;
+                if (topic) video_id = topic.split('~')[1];
+            }
+        } else if (!video_id && yt?.contents?.liveChatRenderer) {
+            const topic = yt.contents.liveChatRenderer.continuations?.[0]?.invalidationContinuationData?.invalidationId?.topic;
+            if (topic) video_id = topic.split('~')[1];
+        }
+
+        return video_id || null;
+    }
+
+    /**
+     * Switch this tab to a video: reset per-video state, read its live state from the
+     * player response, and resolve its channel. Updates sent while the channel is being
+     * resolved queue and go out under the new channel, never the previous video's.
+     */
+    async applyVideo(videoId: string, playerResponse: YTPlayerResponse | null, chatOnly = false): Promise<void> {
+        this.videoId = videoId;
+        this.viewers = null;
+
+        if (!chatOnly) {
+            this.setLiveState(liveStateFromPlayerResponse(playerResponse ?? undefined), 'page');
             // Independent of the channel lookup below, which can fail.
             this.ensureViewCountObserver();
         }
 
+        // The constructor already used this video's id; anything else is a previous video's channel.
+        if (this.channel !== videoId) {
+            this.channel = null;
+        }
+
+        const channel = await this.resolveChannel(videoId);
+        if (this.videoId !== videoId) return; // navigated away while resolving
+
+        this.setChannel(channel ?? videoId);
+        this.log('Received channel info.', videoId, this.channel);
+    }
+
+    /** The channel handle or id of a video, from oembed; null when it cannot be found. */
+    async resolveChannel(videoId: string): Promise<string | null> {
         let author_url: string | null = null;
         try {
-            const oembedResponse = await fetch(`https://www.youtube.com/oembed?url=http%3A//youtube.com/watch%3Fv%3D${video_id}&format=json`);
+            const oembedResponse = await fetch(`https://www.youtube.com/oembed?url=http%3A//youtube.com/watch%3Fv%3D${encodeURIComponent(videoId)}&format=json`);
             if (oembedResponse.ok) {
                 const json = await oembedResponse.json() as YTOembedResponse;
                 author_url = json.author_url;
@@ -610,23 +666,58 @@ export class YouTube extends Seed {
             this.warn('Oembed fetch error:', e);
         }
 
-        // Fallback: use video_id as channel if oembed fails
         if (!author_url) {
             this.warn('Could not get author URL from oembed, using video_id as channel fallback');
-            this.setChannel(video_id);
+            return null;
+        }
+
+        const channel_match = author_url.match(/(?:\/channel\/|@)([^\/]+)/);
+        if (!channel_match?.[1]) {
+            this.log('Could not find a channel ID in the URL. URL:', author_url);
+            return null;
+        }
+        return channel_match[1];
+    }
+
+    /**
+     * After an SPA navigation: if the video changed, clear the old live video's count
+     * under its own channel, then switch to the new one. Pages without a video send nothing.
+     */
+    async onNavigateFinish(event: CustomEvent<YTNavigateDetail> | null): Promise<void> {
+        const videoId = YouTube._extractVideoIdFromUrl();
+
+        let playerResponse: YTPlayerResponse | null = event?.detail?.response?.playerResponse ?? null;
+        if (!playerResponse) {
+            const player = document.querySelector('#movie_player') as YTPlayerElement | null;
+            playerResponse = player?.getPlayerResponse?.() ?? null;
+        }
+        // A player response for some other video says nothing about this one.
+        const responseVideoId = playerResponse?.videoDetails?.videoId;
+        if (responseVideoId && responseVideoId !== videoId) {
+            playerResponse = null;
+        }
+
+        if (videoId === this.videoId) {
+            if (videoId && playerResponse) {
+                this.setLiveState(liveStateFromPlayerResponse(playerResponse), 'navigation');
+            }
             return;
         }
 
-        this.log('Author URL:', author_url);
+        this.log('Navigated from', this.videoId, 'to', videoId);
+        if (this.liveState === true) {
+            this.sendViewerCount(0);
+        }
+        this.liveState = null;
+        this.viewers = null;
 
-        const channel_match = author_url.match(/(?:\/channel\/|@)([^\/]+)/);
-        if (channel_match && channel_match[1]) {
-            this.setChannel(channel_match[1]);
-        } else {
-            this.log('Could not find a channel ID in the URL. URL:', author_url);
+        if (!videoId) {
+            this.videoId = null;
+            this.liveState = false;
+            return;
         }
 
-        this.log('Received channel info.', video_id, author_url, this.channel);
+        await this.applyVideo(videoId, playerResponse);
     }
 
     async onFetchResponse(response: Response): Promise<void> {

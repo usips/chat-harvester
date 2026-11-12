@@ -3,7 +3,7 @@
  * Tests for YouTube message parsing and injection
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fc from 'fast-check';
 import youtubeEvents from '../fixtures/youtube-events.json';
 
@@ -274,6 +274,123 @@ describe('YouTube live viewer counts', () => {
         expect(yt.ensureViewCountObserver).toHaveBeenCalled();
         expect(yt.liveState).toBe(true);
         expect(yt.setChannel).toHaveBeenCalledWith('test123');
+    });
+
+    describe('SPA navigation', () => {
+        const navigate = (href, playerResponse) => {
+            window.location.href = href;
+            return { detail: { pageType: 'watch', response: playerResponse ? { playerResponse } : {} } };
+        };
+        const oembed = handles => vi.fn(url => {
+            const id = new URL(url).searchParams.get('url').split('v=')[1];
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ author_url: `https://www.youtube.com/@${handles[id]}` }) });
+        });
+        let originalFetch;
+        let originalHref;
+        beforeEach(() => {
+            originalFetch = globalThis.fetch;
+            originalHref = window.location.href;
+        });
+        afterEach(() => {
+            globalThis.fetch = originalFetch;
+            window.location.href = originalHref;
+        });
+
+        // Pat McAfee live → NBC News live: the old channel gets 0, the new one its own count.
+        const makeNavYt = () => {
+            const yt = trackViewers(makeYt(true));
+            Object.assign(yt, { videoId: 'patLive', channel: 'ThePatMcAfeeShow', viewers: 12000 });
+            yt.ensureViewCountObserver = vi.fn();
+            yt.sendViewerCount = vi.fn(count => { yt.viewers = count; yt.sent.push([yt.channel, count]); });
+            yt.sent = [];
+            yt.setChannel = vi.fn(channel => { yt.channel = channel; });
+            return yt;
+        };
+
+        it('clears the old live video under its own channel and switches channel', async () => {
+            const yt = makeNavYt();
+            globalThis.fetch = oembed({ nbcLive: 'NBCNews' });
+            const LIVE_NBC = { ...LIVE_PLAYER, videoDetails: { ...LIVE_PLAYER.videoDetails, videoId: 'nbcLive' } };
+            const pending = yt.onNavigateFinish(navigate('https://www.youtube.com/watch?v=nbcLive', LIVE_NBC));
+
+            // While the channel resolves, nothing may be attributed to the old one.
+            expect(yt.channel).toBeNull();
+            await pending;
+
+            expect(yt.sent).toEqual([['ThePatMcAfeeShow', 0]]);
+            expect(yt.channel).toBe('NBCNews');
+            expect(yt.videoId).toBe('nbcLive');
+            expect(yt.liveState).toBe(true);
+            expect(yt.viewers).toBeNull();
+            expect(yt.ensureViewCountObserver).toHaveBeenCalled();
+
+            yt.onViewCountChange(labelMutations('3,881 watching now'), null);
+            expect(yt.sent.at(-1)).toEqual(['NBCNews', 3881]);
+        });
+
+        it('does not report a VOD reached by navigation', async () => {
+            const yt = makeNavYt();
+            globalThis.fetch = oembed({ patVod: 'ThePatMcAfeeShow' });
+            await yt.onNavigateFinish(navigate('https://www.youtube.com/watch?v=patVod',
+                { ...VIDEO_PLAYER, videoDetails: { ...VIDEO_PLAYER.videoDetails, videoId: 'patVod' } }));
+
+            expect(yt.liveState).toBe(false);
+            yt.onViewCountChange(labelMutations('1,234,567 views'), null);
+            expect(yt.sent).toEqual([['ThePatMcAfeeShow', 0]]);
+        });
+
+        it('falls back to #movie_player and ignores a stale player response', async () => {
+            const yt = makeNavYt();
+            globalThis.fetch = oembed({ nbcLive: 'NBCNews' });
+            const spy = vi.spyOn(document, 'querySelector');
+            spy.mockImplementation(sel => (sel === '#movie_player'
+                ? { getPlayerResponse: () => ({ ...LIVE_PLAYER, videoDetails: { isLive: true, videoId: 'patLive' } }) }
+                : null));
+            try {
+                await yt.onNavigateFinish(navigate('https://www.youtube.com/watch?v=nbcLive', null));
+            } finally {
+                spy.mockRestore();
+            }
+            // The player still described the old video, so the new one's state is unknown.
+            expect(yt.liveState).toBeNull();
+            expect(yt.channel).toBe('NBCNews');
+        });
+
+        it('sends nothing on pages without a video', async () => {
+            const yt = makeNavYt();
+            await yt.onNavigateFinish(navigate('https://www.youtube.com/results?search_query=news', null));
+
+            expect(yt.sent).toEqual([['ThePatMcAfeeShow', 0]]);
+            expect(yt.liveState).toBe(false);
+            expect(yt.videoId).toBeNull();
+            yt.onBeforeUnload({});
+            expect(yt.sent).toHaveLength(1);
+        });
+
+        it('ignores a navigation event for the same video', async () => {
+            const yt = makeNavYt();
+            globalThis.fetch = vi.fn();
+            await yt.onNavigateFinish(navigate('https://www.youtube.com/watch?v=patLive', LIVE_PLAYER));
+
+            expect(yt.sent).toEqual([]);
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+            expect(yt.channel).toBe('ThePatMcAfeeShow');
+        });
+
+        it('drops a channel lookup that finishes after the next navigation', async () => {
+            const yt = makeNavYt();
+            let resolveSlow;
+            globalThis.fetch = vi.fn(url => (url.includes('slowLive')
+                ? new Promise(r => { resolveSlow = r; })
+                : oembed({ nbcLive: 'NBCNews' })(url)));
+
+            const first = yt.onNavigateFinish(navigate('https://www.youtube.com/watch?v=slowLive', null));
+            await yt.onNavigateFinish(navigate('https://www.youtube.com/watch?v=nbcLive', null));
+            resolveSlow({ ok: true, json: () => Promise.resolve({ author_url: 'https://www.youtube.com/@Slow' }) });
+            await first;
+
+            expect(yt.channel).toBe('NBCNews');
+        });
     });
 
     it('does not flip to not-live on a page with no player data', () => {
