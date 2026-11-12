@@ -150,4 +150,119 @@ describe('Rumble Platform', () => {
             expect(rumble.log).toHaveBeenCalledWith('User not found:', '88707682');
         });
     });
+    describe('Emote extraction', () => {
+        let rumble;
+
+        // Shape of the real page: the payload is an argument to a minified
+        // RumbleChat() call, so parentheses surround it on both sides.
+        const payload = 'RumbleChat("https://web7.rumble.com/chat/api",\n'
+            + '\t{items:[{id:79764180,title:"Mad at the Internet Emotes",channel_id:1978152,emotes:['
+            + '{name:"hamroll",is_subs_only:false,position:4,file:"https://hugh.cdn.rumble.cloud/video/z12/w/F/s/W/wFsWe.baa.gif"},'
+            + '{name:"hamjam",is_subs_only:false,position:6,file:"https://hugh.cdn.rumble.cloud/video/z12/J/D/m/8/JDm8m.baa.gif"}'
+            + ']},{id:1881816,title:"Rumble Emotes",channel_id:null,emotes:['
+            + '{name:"r+pugdance",is_subs_only:false,position:0,file:"https://hugh.cdn.rumble.cloud/video/z12/S/1/x/Y/S1xYQ.baa.gif"}'
+            + ']}]},\n\t0,\n);';
+
+        beforeEach(() => {
+            rumble = Object.create(Rumble.prototype);
+            rumble.emotes = {};
+            rumble.log = vi.fn();
+            rumble._debug = vi.fn();
+        });
+
+        const stubScripts = (...bodies) => {
+            document.querySelectorAll = vi.fn(() => bodies.map((textContent) => ({ textContent })));
+        };
+
+        it('extracts every emote pack from the payload', () => {
+            const items = Rumble.extractEmoteItems(payload);
+
+            expect(items).toHaveLength(2);
+            expect(items[1].emotes[0].name).toBe('r+pugdance');
+        });
+
+        it('returns null for a script without an emote payload', () => {
+            expect(Rumble.extractEmoteItems('(function (w, d) { w.rumblePodscribe = {e:"73c4"}; })')).toBeNull();
+        });
+
+        it('ignores an items payload that carries no emotes', () => {
+            expect(Rumble.extractEmoteItems('f({items:[{id:1,title:"Playlist"}]})')).toBeNull();
+        });
+
+        it('loads emotes from a later inline script', () => {
+            // Regression: fetchEmotes only read the first inline script in the
+            // body, which on a live page is an unrelated analytics snippet.
+            stubScripts('(function (w, d) { w.rumblePodscribe = {e:"73c4"}; })(window, document);', payload);
+
+            rumble.fetchEmotes();
+
+            expect(rumble.emotes.hamroll).toBe('https://hugh.cdn.rumble.cloud/video/z12/w/F/s/W/wFsWe.baa.gif');
+            expect(rumble.emotes.hamjam).toBeDefined();
+            expect(rumble.emotes['r+pugdance']).toBeDefined();
+        });
+
+        it('replaces emote codes in a message once emotes are loaded', async () => {
+            stubScripts(payload);
+            rumble.fetchEmotes();
+
+            rumble.platform = 'Rumble';
+            rumble.channel = 1978152;
+            rumble.namespace = Rumble.namespace;
+
+            const messages = await rumble.prepareChatMessages(
+                [{ id: '1', user_id: '2', text: 'nice :hamroll: :r+pugdance: :nothere:', time: '2026-10-02T12:00:00+00:00' }],
+                [{ id: '2', username: 'tester' }]
+            );
+
+            expect(messages[0].emojis).toEqual([
+                [':hamroll:', 'https://hugh.cdn.rumble.cloud/video/z12/w/F/s/W/wFsWe.baa.gif', ':hamroll:'],
+                [':r+pugdance:', 'https://hugh.cdn.rumble.cloud/video/z12/S/1/x/Y/S1xYQ.baa.gif', ':r+pugdance:']
+            ]);
+            expect(rumble.log).toHaveBeenCalledWith('no emote for nothere');
+        });
+
+        it('does not log emotes when none are found', () => {
+            stubScripts('var x = 1;');
+
+            rumble.fetchEmotes();
+
+            expect(rumble.emotes).toEqual({});
+            expect(rumble._debug).toHaveBeenCalledWith('No emotes found on the page.');
+        });
+    });
+    describe('Fetch responses', () => {
+        let rumble;
+
+        beforeEach(() => {
+            rumble = Object.create(Rumble.prototype);
+            rumble.emotes = {};
+            rumble.log = vi.fn();
+            rumble.recordFetchHandled = vi.fn();
+            rumble.recordFetchIgnored = vi.fn();
+            rumble.recorder = { record: vi.fn() };
+        });
+
+        it('ignores opaque responses without logging an error', async () => {
+            // Opaque (no-cors) responses report an empty url.
+            await rumble.onFetchResponse({ url: '', status: 0, clone: vi.fn() });
+
+            expect(rumble.log).not.toHaveBeenCalled();
+            expect(rumble.recorder.record).not.toHaveBeenCalled();
+            expect(rumble.recordFetchIgnored).toHaveBeenCalledWith('', 'GET', 0, 'Response has no URL');
+        });
+
+        it('collects emotes from the emote list', async () => {
+            const json = { data: { items: [{ emotes: [{ name: ':pop:', file: 'https://rumble.com/pop.png' }] }] } };
+            const response = {
+                url: 'https://rumble.com/service.php?name=emote.list',
+                status: 200,
+                clone: () => ({ json: () => Promise.resolve(json) })
+            };
+
+            await rumble.onFetchResponse(response);
+
+            expect(rumble.emotes[':pop:']).toBe('https://rumble.com/pop.png');
+            expect(rumble.recordFetchHandled).toHaveBeenCalledWith(response.url, 'GET', 200, json, { emoteCount: 1 });
+        });
+    });
 });

@@ -11,7 +11,7 @@
  * - Capture rants (paid messages)
  */
 
-import { Seed, ChatMessage, uuidv5, EventStatus } from '../core/index.js';
+import { Seed, ChatMessage, uuidv5, EventStatus, parseUrl } from '../core/index.js';
 
 interface RumbleUser {
     id: string;
@@ -88,24 +88,101 @@ export class Rumble extends Seed {
     }
 
     fetchEmotes(): void {
-        const init = document.querySelector('body > script:not([src])');
-        if (!init) return;
+        // The emote picker's data is an inline argument to RumbleChat(). It is not
+        // always the first inline script in the body, so check every one of them.
+        const scripts = Array.from(document.querySelectorAll('script:not([src])'));
 
-        const code = init.textContent ?? '';
-        const regex = /{items:(\[[^\(\)]*\]}\])}/;
-        const match = code.match(regex);
+        for (const script of scripts) {
+            const items = Rumble.extractEmoteItems(script.textContent ?? '');
+            if (items === null) continue;
 
-        if (match) {
-            // eslint-disable-next-line no-eval
-            const itemsObj = eval(`"use strict";(${match[1]})`) as RumbleChannel[];
-            itemsObj.forEach((channel) => {
-                if (channel.emotes !== undefined && channel.emotes.length > 0) {
-                    channel.emotes.forEach((emote) => {
-                        this.emotes[emote.name] = emote.file;
-                    });
-                }
-            });
+            const emoteCount = this.addEmotes(items);
+            if (emoteCount > 0) {
+                this._debug(`Loaded ${emoteCount} emotes from the page.`);
+                return;
+            }
         }
+
+        this._debug('No emotes found on the page.');
+    }
+
+    /**
+     * Pull the `{items:[...]}` emote payload out of a script. The payload is
+     * unquoted JavaScript rather than JSON, and sits inside a minified function
+     * call, so find its end by matching brackets and then evaluate it.
+     */
+    static extractEmoteItems(code: string): RumbleChannel[] | null {
+        const marker = '{items:[';
+
+        for (let start = code.indexOf(marker); start >= 0; start = code.indexOf(marker, start + 1)) {
+            const end = Rumble.findValueEnd(code, start);
+            if (end < 0) continue;
+
+            // Other `{items:[...]}` payloads (playlists, categories) share the key.
+            const emotesAt = code.indexOf('emotes:', start);
+            if (emotesAt < 0 || emotesAt >= end) continue;
+
+            let parsed: { items?: RumbleChannel[] };
+            try {
+                // eslint-disable-next-line no-eval
+                parsed = eval(`"use strict";(${code.slice(start, end)})`) as { items?: RumbleChannel[] };
+            } catch {
+                continue;
+            }
+
+            if (Array.isArray(parsed?.items)) return parsed.items;
+        }
+
+        return null;
+    }
+
+    /** Index just past the bracket that closes the value starting at `start`. */
+    static findValueEnd(code: string, start: number): number {
+        let depth = 0;
+        let quote = '';
+
+        for (let i = start; i < code.length; i++) {
+            const char = code[i];
+
+            if (quote !== '') {
+                if (char === '\\') i++;
+                else if (char === quote) quote = '';
+                continue;
+            }
+
+            switch (char) {
+                case '"':
+                case "'":
+                case '`':
+                    quote = char;
+                    break;
+                case '{':
+                case '[':
+                    depth++;
+                    break;
+                case '}':
+                case ']':
+                    depth--;
+                    if (depth === 0) return i + 1;
+                    if (depth < 0) return -1;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    addEmotes(items: RumbleChannel[] | undefined): number {
+        let emoteCount = 0;
+
+        items?.forEach((channel) => {
+            channel.emotes?.forEach((emote) => {
+                this.emotes[emote.name] = emote.file;
+                emoteCount++;
+            });
+        });
+
+        return emoteCount;
     }
 
     receiveChatPairs(messages: RumbleMessage[], users: RumbleUser[]): void {
@@ -256,19 +333,13 @@ export class Rumble extends Seed {
 
     async onFetchResponse(response: Response): Promise<void> {
         try {
-            const url = new URL(response.url);
-            if (url.searchParams.get('name') == 'emote.list') {
+            const url = parseUrl(response.url);
+            if (url === null) {
+                this.recordFetchIgnored(response.url, 'GET', response.status, 'Response has no URL');
+            } else if (url.searchParams.get('name') == 'emote.list') {
                 const cloned = response.clone();
                 await cloned.json().then((json: { data: { items: RumbleChannel[] } }) => {
-                    let emoteCount = 0;
-                    json.data.items.forEach((channel) => {
-                        if (channel.emotes !== undefined && channel.emotes.length > 0) {
-                            channel.emotes.forEach((emote) => {
-                                this.emotes[emote.name] = emote.file;
-                                emoteCount++;
-                            });
-                        }
-                    });
+                    const emoteCount = this.addEmotes(json.data.items);
                     this.recordFetchHandled(response.url, 'GET', response.status, json, { emoteCount });
                 });
             } else {
