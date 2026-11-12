@@ -32,6 +32,7 @@ vi.stubGlobal('unsafeWindow', undefined);
 // Import after mocks are set up
 const { ChatMessage } = await import('../../src/core/message.js');
 const { Rumble } = await import('../../src/platforms/rumble.js');
+const { uuidv5 } = await import('../../src/core/uuid.js');
 
 describe('Rumble Platform', () => {
     describe('Static properties', () => {
@@ -406,6 +407,80 @@ describe('Rumble Platform', () => {
             await rumble.onFetchResponse(response);
             expect(rumble.sendViewerCount).toHaveBeenCalledWith(5997);
             expect(rumble.recordFetchHandled).toHaveBeenCalledWith(response.url, 'GET', 200, watchingNow, { viewers: 5997 });
+        });
+    });
+
+    describe('Deletions and mutes', () => {
+        let rumble;
+        const es = { url: 'https://web7.rumble.com/chat/api/chat/450251162/stream' };
+        const frame = (json) => ({ data: JSON.stringify(json) });
+
+        beforeEach(() => {
+            rumble = Object.create(Rumble.prototype);
+            rumble.platform = 'Rumble';
+            rumble.channel = '443918684';
+            rumble.namespace = Rumble.namespace;
+            rumble.emotes = {};
+            rumble.log = vi.fn();
+            rumble._debug = vi.fn();
+            rumble.recorder = { recordEventSource: vi.fn() };
+            rumble.sendChatMessages = vi.fn();
+            rumble.receiveSubscriptions = vi.fn();
+            rumble.sendRemoveMessages = vi.fn();
+        });
+
+        const chat = (id, userId) => ({ id, user_id: userId, text: `hi ${id}`, time: '2026-11-12T19:10:25+00:00', type: 'regular' });
+
+        it('removes deleted messages by their uuid', () => {
+            rumble.onEventSourceMessage(es, frame({ type: 'delete_messages', data: { message_ids: ['2830115483605692472'] } }));
+
+            expect(rumble.sendRemoveMessages).toHaveBeenCalledWith([uuidv5('2830115483605692472', Rumble.namespace)]);
+            expect(rumble.recorder.recordEventSource).toHaveBeenCalledWith(
+                es.url, expect.any(String), 'handled', expect.anything(), 'delete_messages'
+            );
+        });
+
+        it('removes every message a muted user sent', () => {
+            rumble.onEventSourceMessage(es, frame({
+                type: 'messages',
+                data: {
+                    messages: [chat('1', '286098814'), chat('2', '7'), chat('3', '286098814')],
+                    users: [{ id: '286098814', username: 'muted' }, { id: '7', username: 'other' }],
+                    channels: []
+                }
+            }));
+
+            // Captured live: user ids arrive as numbers here, strings in messages.
+            rumble.onEventSourceMessage(es, frame({ type: 'mute_users', data: { user_ids: [286098814] } }));
+
+            expect(rumble.sendRemoveMessages).toHaveBeenCalledWith([
+                uuidv5('1', Rumble.namespace),
+                uuidv5('3', Rumble.namespace)
+            ]);
+        });
+
+        it('sends nothing when a muted user has no known messages', () => {
+            rumble.onEventSourceMessage(es, frame({ type: 'mute_users', data: { user_ids: [1] } }));
+            expect(rumble.sendRemoveMessages).not.toHaveBeenCalled();
+        });
+
+        it('does not track the same message twice', () => {
+            rumble.rememberSentMessages([chat('1', '5')]);
+            rumble.rememberSentMessages([chat('1', '5')]);
+            rumble.receiveMutedUsers(['5']);
+            expect(rumble.sendRemoveMessages).toHaveBeenCalledWith([uuidv5('1', Rumble.namespace)]);
+        });
+
+        it('bounds the ids kept per user', () => {
+            rumble.rememberSentMessages(Array.from({ length: 250 }, (_, i) => chat(String(i), '5')));
+            expect(rumble.receiveMutedUsers(['5'])).toHaveLength(200);
+        });
+
+        it('records pin frames as ignored', () => {
+            rumble.onEventSourceMessage(es, frame({ type: 'pin_message', data: {} }));
+            expect(rumble.recorder.recordEventSource).toHaveBeenCalledWith(
+                es.url, expect.any(String), 'ignored', null, 'pin_message', expect.any(String)
+            );
         });
     });
 

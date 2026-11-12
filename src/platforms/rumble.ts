@@ -19,6 +19,11 @@ export const VIEWER_POLL_MS = 60_000;
 /** The service the watch page polls for its "watching now" count. */
 const WATCHING_NOW_URL = 'https://wn0.rumble.com/service.php?name=video.watching-now&video_id=';
 
+/** Users whose sent message ids are kept for `mute_users`; oldest dropped first. */
+const MUTE_TRACKED_USERS = 2000;
+/** Sent message ids kept per user for `mute_users`. */
+const MUTE_TRACKED_IDS_PER_USER = 200;
+
 /** `livestream_status` of a stream that is on air right now. */
 const LIVESTREAM_STATUS_LIVE = 2;
 
@@ -68,8 +73,13 @@ interface RumbleChannel {
 interface RumbleEventSourceData {
     type: string;
     data: {
+        /** `init` and `messages` */
         messages: RumbleMessage[];
         users: RumbleUser[];
+        /** `delete_messages` */
+        message_ids?: (string | number)[];
+        /** `mute_users`, e.g. `{"type":"mute_users","data":{"user_ids":[286098814]}}` */
+        user_ids?: (string | number)[];
     };
 }
 
@@ -86,6 +96,8 @@ export class Rumble extends Seed {
     static namespace = '5ceefcfb-4aa5-443a-bea6-1f8590231471';
 
     emotes: Record<string, string> = {};
+    /** Sent message uuids per Rumble user id, for `mute_users`. Lazily created. */
+    private sentByUser?: Map<string, string[]>;
 
     constructor() {
         const channel = null; // Cannot be determined before DOM is ready
@@ -274,6 +286,52 @@ export class Rumble extends Seed {
         this.prepareChatMessages(messages, users).then((data) => {
             this.sendChatMessages(data);
         });
+
+        this.rememberSentMessages(messages);
+    }
+
+    /**
+     * Remember which message ids each user sent so a later `mute_users` can take
+     * them off the overlay, as Rumble's own chat does. Bounded per user and in
+     * the number of users, most recently active kept.
+     */
+    rememberSentMessages(messages: RumbleMessage[]): void {
+        this.sentByUser ??= new Map();
+        for (const messageData of messages) {
+            const userId = String(messageData.user_id);
+            const id = uuidv5(String(messageData.id), this.namespace!);
+            const ids = this.sentByUser.get(userId) ?? [];
+            this.sentByUser.delete(userId);
+            if (!ids.includes(id)) {
+                ids.push(id);
+                if (ids.length > MUTE_TRACKED_IDS_PER_USER) ids.shift();
+            }
+            this.sentByUser.set(userId, ids);
+        }
+
+        while (this.sentByUser.size > MUTE_TRACKED_USERS) {
+            const oldest = this.sentByUser.keys().next().value as string;
+            this.sentByUser.delete(oldest);
+        }
+    }
+
+    /** `delete_messages`: remove the given Rumble message ids. */
+    receiveDeletedMessages(messageIds: (string | number)[]): string[] {
+        const ids = messageIds.map((id) => uuidv5(String(id), this.namespace!));
+        if (ids.length > 0) this.sendRemoveMessages(ids);
+        return ids;
+    }
+
+    /** `mute_users`: remove every message we sent for the given Rumble user ids. */
+    receiveMutedUsers(userIds: (string | number)[]): string[] {
+        const ids: string[] = [];
+        for (const userId of userIds) {
+            const key = String(userId);
+            ids.push(...(this.sentByUser?.get(key) ?? []));
+            this.sentByUser?.delete(key);
+        }
+        if (ids.length > 0) this.sendRemoveMessages(ids);
+        return ids;
     }
 
     prepareChatMessages(messages: RumbleMessage[], users: RumbleUser[]): Promise<ChatMessage[]> {
@@ -398,6 +456,20 @@ export class Rumble extends Seed {
                         messageCount: json.data.messages?.length || 0,
                         userCount: json.data.users?.length || 0
                     }, json.type);
+                    break;
+                case 'delete_messages': {
+                    const removed = this.receiveDeletedMessages(json.data.message_ids ?? []);
+                    this.recorder.recordEventSource(es.url, event.data, EventStatus.HANDLED, { removed }, json.type);
+                    break;
+                }
+                case 'mute_users': {
+                    const removed = this.receiveMutedUsers(json.data.user_ids ?? []);
+                    this.recorder.recordEventSource(es.url, event.data, EventStatus.HANDLED, { removed }, json.type);
+                    break;
+                }
+                case 'pin_message':
+                case 'unpin_message':
+                    this.recorder.recordEventSource(es.url, event.data, EventStatus.IGNORED, null, json.type, 'Pinning is not forwarded');
                     break;
                 default:
                     this._debug('EventSource received data with unknown type.', json);
