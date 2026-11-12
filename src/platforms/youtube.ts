@@ -62,6 +62,7 @@ interface YTViewCountRenderer {
 interface YTInitialData {
     continuationContents?: {
         liveChatContinuation?: {
+            actions?: YTAction[];
             header?: {
                 liveChatHeaderRenderer?: {
                     overflowMenu?: {
@@ -90,6 +91,8 @@ interface YTInitialData {
     };
     contents?: {
         liveChatRenderer?: {
+            /** The chat frame's initial messages. */
+            actions?: YTAction[];
             continuations?: {
                 invalidationContinuationData?: {
                     invalidationId?: {
@@ -133,6 +136,7 @@ interface YTRenderer {
         thumbnails: YTThumbnail[];
     };
     timestampUsec: string;
+    authorExternalChannelId?: string;
     authorBadges?: YTAuthorBadge[];
     message?: {
         runs?: YTRun[];
@@ -188,12 +192,42 @@ interface YTAction {
     };
     addChatItemAction?: YTAction;
     addLiveChatMembershipItemAction?: YTAction;
+    replaceChatItemAction?: {
+        targetItemId?: string;
+        replacementItem?: YTAction['item'];
+    };
     removeChatItemAction?: {
         targetItemId: string;
+    };
+    markChatItemAsDeletedAction?: {
+        targetItemId?: string;
+    };
+    removeChatItemByAuthorAction?: {
+        externalChannelId?: string;
+    };
+    markChatItemsByAuthorAsDeletedAction?: {
+        externalChannelId?: string;
     };
     addLiveChatTickerItemAction?: unknown;
     updateLiveChatPollAction?: unknown;
 }
+
+/** Live-chat actions that only drive YouTube's UI and carry no messages. */
+const YT_IGNORED_ACTIONS = [
+    'addLiveChatTickerItemAction',
+    'updateLiveChatPollAction',
+    'addBannerToLiveChatCommand',
+    'removeBannerForLiveChatCommand',
+    'liveChatReportModerationStateCommand',
+    'replayChatItemAction',
+    'showLiveChatTooltipCommand',
+    'showLiveChatActionPanelAction',
+    'closeLiveChatActionPanelAction',
+];
+
+/** Bounds for the author → message ids map used by "remove by author" actions. */
+const MAX_TRACKED_AUTHORS = 2000;
+const MAX_IDS_PER_AUTHOR = 50;
 
 interface YTLiveChatResponse {
     continuationContents?: {
@@ -279,6 +313,9 @@ export class YouTube extends Seed {
     private _viewCountObserver: MutationObserver | null = null;
     private _viewCountElem: Element | null = null;
     private _viewCountTimer: ReturnType<typeof setInterval> | null = null;
+
+    /** Author channel id → ids of messages sent for them (bounded, oldest author dropped). */
+    private _authorMessages: Map<string, string[]> | null = null;
 
     /**
      * Whether this tab's video is live: null until known. A regular video's "views"
@@ -482,6 +519,7 @@ export class YouTube extends Seed {
                 message.username = renderer!.authorName.simpleText;
                 message.avatar = renderer!.authorPhoto.thumbnails.at(-1)!.url;
                 message.sent_at = Math.floor(parseInt(renderer!.timestampUsec) / 1000);
+                this.trackAuthorMessage(renderer!.authorExternalChannelId, message.id);
 
                 const badges = renderer!.authorBadges;
                 message.is_verified = hasBadge(badges, 'VERIFIED');
@@ -580,6 +618,9 @@ export class YouTube extends Seed {
             }
             this.log('Video ID:', video_id, 'Chat only:', true);
             await this.applyVideo(video_id, null, true);
+            if (!url.pathname.includes('/live_chat_replay')) {
+                this.receiveInitialChat();
+            }
             return;
         }
 
@@ -720,6 +761,91 @@ export class YouTube extends Seed {
         await this.applyVideo(videoId, playerResponse);
     }
 
+    /**
+     * Unwrap a batch of live-chat actions (from get_live_chat or the chat frame's
+     * initial data): send removals, start parsing new items, and return what was
+     * added and what was not understood.
+     */
+    processChatActions(actions: YTAction[]): { messagesToAdd: YTAction[]; unhandledActions: YTAction[] } {
+        const unhandledActions: YTAction[] = [];
+        const removals: string[] = [];
+        const messagesToAdd: YTAction[] = [];
+
+        for (const action of actions) {
+            if (!action || typeof action !== 'object') continue;
+
+            if (action.addChatItemAction) {
+                messagesToAdd.push(action.addChatItemAction);
+            } else if (action.addLiveChatMembershipItemAction) {
+                messagesToAdd.push(action.addLiveChatMembershipItemAction);
+            } else if (action.replaceChatItemAction?.replacementItem) {
+                // A placeholder replaced by the real item, which keeps the placeholder's id.
+                messagesToAdd.push({ item: action.replaceChatItemAction.replacementItem });
+            } else if (action.removeChatItemAction?.targetItemId) {
+                removals.push(uuidv5(action.removeChatItemAction.targetItemId, this.namespace!));
+            } else if (action.markChatItemAsDeletedAction?.targetItemId) {
+                removals.push(uuidv5(action.markChatItemAsDeletedAction.targetItemId, this.namespace!));
+            } else if (action.removeChatItemByAuthorAction || action.markChatItemsByAuthorAsDeletedAction) {
+                const author = (action.removeChatItemByAuthorAction ?? action.markChatItemsByAuthorAsDeletedAction)!.externalChannelId;
+                removals.push(...this.takeAuthorMessages(author));
+            } else if (YT_IGNORED_ACTIONS.some(key => key in action)) {
+                // UI-only: tickers, polls, banners, moderation prompts, replay wrappers.
+            } else {
+                this.log('Unknown get_live_chat action.', action);
+                unhandledActions.push(action);
+            }
+        }
+
+        if (removals.length > 0) {
+            this.sendRemoveMessages(removals);
+        }
+        if (messagesToAdd.length > 0) {
+            this.receiveChatMessages(messagesToAdd);
+        }
+
+        return { messagesToAdd, unhandledActions };
+    }
+
+    /** Remember which messages an author sent, so "remove all by author" can name them. */
+    private trackAuthorMessage(authorChannelId: string | undefined, messageId: string): void {
+        if (!authorChannelId) return;
+        this._authorMessages ??= new Map();
+
+        const ids = this._authorMessages.get(authorChannelId) ?? [];
+        this._authorMessages.delete(authorChannelId); // re-insert as most recent
+        if (!ids.includes(messageId)) ids.push(messageId);
+        if (ids.length > MAX_IDS_PER_AUTHOR) ids.shift();
+        this._authorMessages.set(authorChannelId, ids);
+
+        if (this._authorMessages.size > MAX_TRACKED_AUTHORS) {
+            const oldest = this._authorMessages.keys().next().value;
+            if (oldest !== undefined) this._authorMessages.delete(oldest);
+        }
+    }
+
+    /** The message ids sent for an author (forgotten afterwards). */
+    private takeAuthorMessages(authorChannelId: string | undefined): string[] {
+        if (!authorChannelId || !this._authorMessages) return [];
+        const ids = this._authorMessages.get(authorChannelId) ?? [];
+        this._authorMessages.delete(authorChannelId);
+        return ids;
+    }
+
+    /**
+     * The chat frame's first batch of messages is in its ytInitialData, not a fetch.
+     * Replayed through the same path once the channel is known; UUIDv5 ids make any
+     * overlap with the first get_live_chat poll harmless.
+     */
+    receiveInitialChat(): void {
+        const yt = (WINDOW as unknown as YTWindow).ytInitialData;
+        const actions = yt?.contents?.liveChatRenderer?.actions
+            ?? yt?.continuationContents?.liveChatContinuation?.actions;
+        if (!Array.isArray(actions) || actions.length === 0) return;
+
+        this.log('Replaying', actions.length, 'initial chat actions.');
+        this.processChatActions(actions);
+    }
+
     async onFetchResponse(response: Response): Promise<void> {
         if (response.url.includes('/updated_metadata')) {
             await this._handleUpdatedMetadata(response);
@@ -731,35 +857,22 @@ export class YouTube extends Seed {
             return;
         }
 
+        // A finished stream's chat replay is history, not live chat.
+        if (response.url.includes('/get_live_chat_replay')) {
+            this.recordFetchIgnored(response.url, 'GET', response.status, 'Chat replay');
+            return;
+        }
+
         try {
             const json = await response.json() as YTLiveChatResponse;
             const actions = json?.continuationContents?.liveChatContinuation?.actions;
 
-            if (!actions) {
+            if (!Array.isArray(actions)) {
                 this.recordFetchIgnored(response.url, 'GET', response.status, 'No actions in response');
                 return;
             }
 
-            const unhandledActions: YTAction[] = [];
-            const messagesToAdd = actions
-                .map(action => {
-                    if (action.addChatItemAction) return action.addChatItemAction;
-                    if (action.addLiveChatMembershipItemAction) return action.addLiveChatMembershipItemAction;
-                    if (action.removeChatItemAction) {
-                        this.sendRemoveMessages([uuidv5(action.removeChatItemAction.targetItemId, this.namespace!)]);
-                        return null;
-                    }
-                    if (action.addLiveChatTickerItemAction) return null;
-                    if (action.updateLiveChatPollAction) return null;
-                    this.log('Unknown get_live_chat action.', action);
-                    unhandledActions.push(action);
-                    return null;
-                })
-                .filter((a): a is YTAction => a !== null);
-
-            if (messagesToAdd.length > 0) {
-                this.receiveChatMessages(messagesToAdd);
-            }
+            const { messagesToAdd, unhandledActions } = this.processChatActions(actions);
 
             // Record the fetch with parsed data
             this.recordFetchHandled(response.url, 'GET', response.status, json, {

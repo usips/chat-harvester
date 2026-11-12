@@ -87,6 +87,7 @@ vi.stubGlobal('unsafeWindow', undefined);
 
 // Import after mocks are set up
 const { ChatMessage } = await import('../../src/core/message.js');
+const { uuidv5 } = await import('../../src/core/uuid.js');
 const { YouTube } = await import('../../src/platforms/youtube.js');
 const { liveStateFromPlayerResponse, viewerCountFromRenderer, viewerCountFromEntity } = await import('../../src/platforms/youtube.js');
 
@@ -398,6 +399,116 @@ describe('YouTube live viewer counts', () => {
         yt.setLiveState(liveStateFromPlayerResponse(undefined), 'page');
         expect(yt.liveState).toBe(true);
         expect(yt.sendViewerCount).not.toHaveBeenCalled();
+    });
+});
+
+describe('YouTube live chat actions', () => {
+    const chatResponse = (url, actions) => ({
+        url, status: 200,
+        json: () => Promise.resolve({ continuationContents: { liveChatContinuation: { actions } } }),
+    });
+    const makeChatYt = () => {
+        const yt = Object.create(YouTube.prototype);
+        Object.assign(yt, {
+            platform: 'YouTube', channel: 'TestChannel', namespace: YouTube.namespace,
+            log: vi.fn(), warn: vi.fn(), _debug: vi.fn(),
+            sendChatMessages: vi.fn(), sendRemoveMessages: vi.fn(),
+            recordFetchHandled: vi.fn(), recordFetchIgnored: vi.fn(), recorder: { record: vi.fn() },
+        });
+        return yt;
+    };
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+    const textAction = youtubeEvents.liveChatTextMessage;
+    const textId = textAction.addChatItemAction.item.liveChatTextMessageRenderer.id;
+
+    it('ignores chat replay of a finished stream', async () => {
+        const yt = makeChatYt();
+        await yt.onFetchResponse(chatResponse(
+            'https://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay?prettyPrint=false', [textAction]));
+        await flush();
+
+        expect(yt.sendChatMessages).not.toHaveBeenCalled();
+        expect(yt.recordFetchIgnored).toHaveBeenCalledWith(expect.any(String), 'GET', 200, 'Chat replay');
+    });
+
+    it('ignores UI-only actions without reporting them as unknown', async () => {
+        const yt = makeChatYt();
+        await yt.onFetchResponse(chatResponse(
+            'https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?prettyPrint=false', [
+                { addBannerToLiveChatCommand: { bannerRenderer: {} } },
+                { liveChatReportModerationStateCommand: {} },
+                { replayChatItemAction: { actions: [] } },
+                { addLiveChatTickerItemAction: {} },
+            ]));
+
+        expect(yt.log).not.toHaveBeenCalledWith('Unknown get_live_chat action.', expect.anything());
+        expect(yt.recordFetchHandled.mock.calls[0][4]).toMatchObject({ unhandledCount: 0, messagesAdded: 0 });
+    });
+
+    it('removes deleted messages by id and by author', async () => {
+        const yt = makeChatYt();
+        const url = 'https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?prettyPrint=false';
+        await yt.onFetchResponse(chatResponse(url, [textAction]));
+        await flush();
+        const [sent] = yt.sendChatMessages.mock.calls[0][0];
+
+        await yt.onFetchResponse(chatResponse(url, [
+            { markChatItemAsDeletedAction: { targetItemId: 'other-id', deletedStateMessage: { runs: [] } } },
+            { removeChatItemByAuthorAction: { externalChannelId: 'UCLtCroX0zcetc1zEaPTLB4A' } },
+            { removeChatItemByAuthorAction: { externalChannelId: 'UCUnknown' } },
+        ]));
+
+        expect(yt.sendRemoveMessages).toHaveBeenCalledTimes(1);
+        expect(yt.sendRemoveMessages).toHaveBeenCalledWith([uuidv5('other-id', YouTube.namespace), sent.id]);
+        expect(sent.id).toBe(uuidv5(textId, YouTube.namespace));
+    });
+
+    it('replays the chat frame\'s initial messages once the channel is known', async () => {
+        const yt = makeChatYt();
+        yt.setChannel = vi.fn(channel => { yt.channel = channel; });
+        const originalFetch = globalThis.fetch;
+        const originalHref = window.location.href;
+        globalThis.fetch = vi.fn(() => Promise.resolve({
+            ok: true, json: () => Promise.resolve({ author_url: 'https://www.youtube.com/@ChatChannel' }),
+        }));
+        window.location.href = 'https://www.youtube.com/live_chat?is_popout=1&v=chat123';
+        window.ytInitialData = { contents: { liveChatRenderer: { actions: [
+            textAction, { addLiveChatTickerItemAction: {} },
+        ] } } };
+        try {
+            await yt.onDocumentReady({});
+            await flush();
+        } finally {
+            globalThis.fetch = originalFetch;
+            window.location.href = originalHref;
+            window.ytInitialData = {};
+        }
+
+        expect(yt.channel).toBe('ChatChannel');
+        expect(yt.sendChatMessages).toHaveBeenCalledTimes(1);
+        const [message] = yt.sendChatMessages.mock.calls[0][0];
+        expect(message.id).toBe(uuidv5(textId, YouTube.namespace));
+        expect(message.channel).toBe('ChatChannel');
+    });
+
+    it('does not replay the initial messages of a chat replay frame', async () => {
+        const yt = makeChatYt();
+        yt.setChannel = vi.fn(channel => { yt.channel = channel; });
+        const originalFetch = globalThis.fetch;
+        const originalHref = window.location.href;
+        globalThis.fetch = vi.fn(() => Promise.reject(new Error('offline')));
+        window.location.href = 'https://www.youtube.com/live_chat_replay?v=vod123';
+        window.ytInitialData = { contents: { liveChatRenderer: { actions: [textAction] } } };
+        try {
+            await yt.onDocumentReady({});
+            await flush();
+        } finally {
+            globalThis.fetch = originalFetch;
+            window.location.href = originalHref;
+            window.ytInitialData = {};
+        }
+
+        expect(yt.sendChatMessages).not.toHaveBeenCalled();
     });
 });
 
