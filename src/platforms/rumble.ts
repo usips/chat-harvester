@@ -408,6 +408,10 @@ export class Rumble extends Seed {
 
                 if (user.badges !== undefined) {
                     user.badges.forEach((badge) => {
+                        // whale-gray/-blue/-yellow/... are rant-spending tiers, not
+                        // subscriptions; SNEED has no flag for them.
+                        if (badge.startsWith('whale-')) return;
+
                         switch (badge) {
                             case 'admin':
                                 message.is_owner = true;
@@ -415,15 +419,14 @@ export class Rumble extends Seed {
                             case 'moderator':
                                 message.is_mod = true;
                                 break;
-                            case 'whale-gray':
-                            case 'whale-blue':
-                            case 'whale-yellow':
+                            case 'subscriber':
                             case 'locals':
                             case 'locals_supporter':
                             case 'recurring_subscription':
                                 message.is_sub = true;
                                 break;
                             case 'premium':
+                            case 'creator_program_participant':
                                 break;
                             case 'verified':
                                 message.is_verified = true;

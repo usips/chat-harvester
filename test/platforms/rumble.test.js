@@ -549,6 +549,64 @@ describe('Rumble Platform', () => {
         });
     });
 
+    describe('Badges and gifts', () => {
+        let rumble;
+
+        beforeEach(() => {
+            rumble = Object.create(Rumble.prototype);
+            rumble.platform = 'Rumble';
+            rumble.channel = '443918684';
+            rumble.namespace = Rumble.namespace;
+            rumble.emotes = {};
+            rumble.log = vi.fn();
+            rumble.sendChatMessages = vi.fn();
+        });
+
+        const withBadges = async (badges) => {
+            const [out] = await rumble.prepareChatMessages(
+                [{ id: '1', user_id: '2', text: 'hi', time: '2026-11-12T19:10:25+00:00' }],
+                [{ id: '2', username: 'u', badges }]
+            );
+            return out;
+        };
+
+        it('does not treat rant whale tiers as subscriptions', async () => {
+            // Captured: whale-* appears on accounts with no subscription badge.
+            for (const badge of ['whale-gray', 'whale-blue', 'whale-yellow']) {
+                const out = await withBadges([badge]);
+                expect(out.is_sub).toBe(false);
+            }
+            expect(rumble.log).not.toHaveBeenCalled();
+        });
+
+        it('flags subscribers', async () => {
+            expect((await withBadges(['recurring_subscription', 'whale-gray'])).is_sub).toBe(true);
+            expect((await withBadges(['subscriber'])).is_sub).toBe(true);
+            expect((await withBadges(['locals_supporter'])).is_sub).toBe(true);
+        });
+
+        it('knows the creator program badge', async () => {
+            const out = await withBadges(['creator_program_participant', 'verified', 'moderator', 'admin']);
+            expect(rumble.log).not.toHaveBeenCalled();
+            expect(out.is_verified).toBe(true);
+            expect(out.is_mod).toBe(true);
+            expect(out.is_owner).toBe(true);
+            expect(out.is_sub).toBe(false);
+        });
+
+        it('values a gift purchase at $5 per gifted subscription', async () => {
+            const [sub] = await rumble.prepareSubscriptions(
+                [rumbleEvents.GiftPurchaseNotification], [rumbleEvents.GiftPurchaseUser]
+            );
+            rumble.receiveSubscriptions(sub);
+
+            const [[sent]] = rumble.sendChatMessages.mock.calls[0];
+            expect(sent.amount).toBe(25);
+            expect(sent.currency).toBe('USD');
+            expect(sent.is_subscription).toBe(true);
+        });
+    });
+
     describe('Channel detection', () => {
         it('reads the video id from a pop-out chat path', () => {
             expect(Rumble.popupVideoId('/chat/popup/443918684')).toBe('443918684');
