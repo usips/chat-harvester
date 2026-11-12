@@ -11,7 +11,7 @@
  * - Capture membership gifts
  */
 
-import { Seed, ChatMessage, uuidv5, WINDOW, EventStatus } from '../core/index.js';
+import { Seed, ChatMessage, uuidv5, WINDOW, EventStatus, parseAmount } from '../core/index.js';
 
 interface YTWindow extends Window {
     ytInitialData?: YTInitialData;
@@ -123,9 +123,16 @@ interface YTRenderer {
     message?: {
         runs?: YTRun[];
     };
+}
+
+/** Price fields shared by paid messages and paid stickers. */
+interface YTPurchase {
     purchaseAmountText?: {
-        simpleText: string;
+        simpleText?: string;
     };
+    /** Structured amount, when present: micros of `currency`. */
+    purchaseAmountMicros?: string | number;
+    currency?: string;
 }
 
 interface YTGiftingEventRenderer {
@@ -160,7 +167,7 @@ interface YTPlaceholderRenderer {
 interface YTAction {
     item?: {
         liveChatTextMessageRenderer?: YTRenderer;
-        liveChatPaidMessageRenderer?: YTRenderer;
+        liveChatPaidMessageRenderer?: YTRenderer & YTPurchase;
         liveChatMembershipGiftingEventRenderer?: YTGiftingEventRenderer;
         liveChatGiftMembershipReceivedEventRenderer?: YTGiftReceivedRenderer;
         liveChatPlaceholderItemRenderer?: YTPlaceholderRenderer;
@@ -371,6 +378,29 @@ export class YouTube extends Seed {
         this.log('Injected external message:', username, text);
     }
 
+    /**
+     * Set a paid item's amount and currency. Structured micros are preferred when
+     * YouTube sends them; otherwise the display price ("CA$5.00") is parsed.
+     */
+    applyPurchase(message: ChatMessage, renderer: YTPurchase): void {
+        const micros = Number(renderer.purchaseAmountMicros);
+        if (renderer.purchaseAmountMicros !== undefined && Number.isFinite(micros)
+            && typeof renderer.currency === 'string' && /^[A-Z]{3}$/.test(renderer.currency)) {
+            message.amount = micros / 1_000_000;
+            message.currency = renderer.currency;
+            return;
+        }
+
+        const text = renderer.purchaseAmountText?.simpleText;
+        const parsed = parseAmount(text);
+        if (parsed === null) {
+            this.warn('Could not parse SuperChat currency or amount.', text);
+            return;
+        }
+        message.amount = parsed.amount;
+        message.currency = parsed.currency;
+    }
+
     prepareChatMessages(actions: YTAction[]): Promise<ChatMessage[]> {
         function hasBadge(badges: YTAuthorBadge[] | undefined, iconType: string): boolean {
             return badges?.some(badge =>
@@ -382,50 +412,6 @@ export class YouTube extends Seed {
             return badges?.some(badge => {
                 return badge.liveChatAuthorBadgeRenderer?.customThumbnail !== undefined;
             }) ?? false;
-        }
-
-        function paymentValue(paymentText: string): [string | null, number | null] {
-            const currencyData: Record<string, string> = {
-                'us$': 'USD', 'a$': 'AUD', 'c$': 'CAD', 'clp$': 'CLP', 'cop$': 'COP',
-                'hk$': 'HKD', 'mx$': 'MXN', 'nt$': 'TWD', 'nz$': 'NZD', 'r$': 'BRL',
-                'rd$': 'DOP', 's$': 'SGD', 's/': 'PEN', 'b/.': 'PAB', 'bs.': 'BOB',
-                'лв': 'BGN', 'ден': 'MKD', 'дин.': 'RSD', 'ر.س': 'SAR', 'د.إ': 'AED',
-                'br': 'BYN', 'kn': 'HRK', 'kč': 'CZK', 'kr': 'SEK', 'ft': 'HUF',
-                'zł': 'PLN', 'cfa': 'XOF', 'ush': 'UGX', 'lei': 'RON', 'chf': 'CHF',
-                '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₩': 'KRW', '₹': 'INR', '₪': 'ILS',
-                '₱': 'PHP', '₽': 'RUB', '₺': 'TRY', '₦': 'NGN', '₲': 'PYG', '₡': 'CRC',
-                'q': 'GTQ', 'l': 'HNL', '$': 'USD', 'r': 'ZAR',
-                'aed': 'AED', 'ars': 'ARS', 'aud': 'AUD', 'bgn': 'BGN', 'bob': 'BOB',
-                'brl': 'BRL', 'byn': 'BYN', 'cad': 'CAD', 'clp': 'CLP',
-                'cop': 'COP', 'crc': 'CRC', 'czk': 'CZK', 'dkk': 'DKK', 'dop': 'DOP',
-                'eur': 'EUR', 'gbp': 'GBP', 'gtq': 'GTQ', 'hkd': 'HKD', 'hnl': 'HNL',
-                'hrk': 'HRK', 'huf': 'HUF', 'ils': 'ILS', 'inr': 'INR', 'isk': 'ISK',
-                'jpy': 'JPY', 'krw': 'KRW', 'mkd': 'MKD', 'mxn': 'MXN', 'ngn': 'NGN',
-                'nio': 'NIO', 'nok': 'NOK', 'nzd': 'NZD', 'pab': 'PAB', 'pen': 'PEN',
-                'php': 'PHP', 'pln': 'PLN', 'pyg': 'PYG', 'ron': 'RON', 'rsd': 'RSD',
-                'rub': 'RUB', 'sar': 'SAR', 'sek': 'SEK', 'sgd': 'SGD', 'twd': 'TWD',
-                'try': 'TRY', 'ugx': 'UGX', 'usd': 'USD', 'xof': 'XOF', 'zar': 'ZAR'
-            };
-
-            const symbols = Object.keys(currencyData)
-                .sort((a, b) => b.length - a.length)
-                .map(s => s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'))
-                .join('|');
-
-            const paymentRegex = new RegExp(
-                `^\\s*(?:(${symbols})\\s*([\\d,]+(?:\\.\\d{1,2})?)|([\\d,]+(?:\\.\\d{1,2})?)\\s*(${symbols}))\\s*$`,
-                'i'
-            );
-
-            const match = paymentText.match(paymentRegex);
-            if (!match) return [null, null];
-
-            const currencySymbol = (match[1] || match[4] || '').toLowerCase();
-            const amountString = match[2] || match[3];
-            const amount = parseFloat(amountString.replace(/,/g, ''));
-            const currencyCode = currencyData[currencySymbol] || null;
-
-            return [currencyCode, amount];
         }
 
         return Promise.all(actions.map(async (action) => {
@@ -453,13 +439,7 @@ export class YouTube extends Seed {
                 message.is_owner = hasBadge(badges, 'OWNER');
 
                 if (action.item.liveChatPaidMessageRenderer !== undefined) {
-                    const [currency, amount] = paymentValue(renderer!.purchaseAmountText!.simpleText);
-                    if (currency === null || amount === null) {
-                        this.warn('Could not parse SuperChat currency or amount.', renderer!.purchaseAmountText!.simpleText);
-                    } else {
-                        message.amount = amount;
-                        message.currency = currency;
-                    }
+                    this.applyPurchase(message, action.item.liveChatPaidMessageRenderer);
                 }
 
                 if (renderer!.message && renderer!.message.runs) {

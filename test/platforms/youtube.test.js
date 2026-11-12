@@ -249,6 +249,35 @@ describe('YouTube Platform', () => {
             expect(messages[0].currency).toBe('USD');
         });
 
+        it.each([
+            ['CA$5.00', 5, 'CAD'],
+            ['R$10,00', 10, 'BRL'],
+            ['5,00 €', 5, 'EUR'],
+            ['€1.234,56', 1234.56, 'EUR'],
+            ['₫20,000', 20000, 'VND'],
+            ['THB 100.00', 100, 'THB'],
+            ['zł20,00', 20, 'PLN'],
+        ])('parses SuperChat price %s', async (text, amount, currency) => {
+            const action = { item: { liveChatPaidMessageRenderer: {
+                ...youtubeEvents.liveChatPaidMessage.addChatItemAction.item.liveChatPaidMessageRenderer,
+                purchaseAmountText: { simpleText: text },
+            } } };
+            const [message] = await youtube.prepareChatMessages([action]);
+            expect(message.amount).toBe(amount);
+            expect(message.currency).toBe(currency);
+        });
+
+        it('prefers structured purchase micros over the display price', async () => {
+            const action = { item: { liveChatPaidMessageRenderer: {
+                ...youtubeEvents.liveChatPaidMessage.addChatItemAction.item.liveChatPaidMessageRenderer,
+                purchaseAmountText: { simpleText: '¥1,000' },
+                purchaseAmountMicros: '1000000000', currency: 'JPY',
+            } } };
+            const [message] = await youtube.prepareChatMessages([action]);
+            expect(message.amount).toBe(1000);
+            expect(message.currency).toBe('JPY');
+        });
+
         it('should parse messages with emojis', async () => {
             const action = youtubeEvents.liveChatWithEmoji.addChatItemAction;
             const messages = await youtube.prepareChatMessages([action]);
