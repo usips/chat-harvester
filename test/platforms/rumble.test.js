@@ -484,6 +484,71 @@ describe('Rumble Platform', () => {
         });
     });
 
+    describe('Channel personas', () => {
+        let rumble;
+
+        beforeEach(() => {
+            rumble = Object.create(Rumble.prototype);
+            rumble.platform = 'Rumble';
+            rumble.channel = '443918684';
+            rumble.namespace = Rumble.namespace;
+            rumble.emotes = {};
+            rumble.log = vi.fn();
+        });
+
+        // Shape from the audit: Rumble shows channel "Orlaghs" for account "OrlynDp".
+        const users = [{
+            id: '286098814', username: 'OrlynDp', link: '/user/OrlynDp',
+            'image.1': 'https://hugh.cdn.rumble.cloud/user.jpeg', badges: ['verified']
+        }];
+        const channels = [{
+            id: '7984292', username: 'Orlaghs', link: '/c/Orlaghs',
+            'image.1': 'https://hugh.cdn.rumble.cloud/channel.png'
+        }];
+        const message = (extra) => ({
+            id: '2830115483605692472', user_id: '286098814', text: 'hello',
+            time: '2026-11-12T19:10:25+00:00', type: 'regular', ...extra
+        });
+
+        it('shows the channel a message was posted as', async () => {
+            const [out] = await rumble.prepareChatMessages([message({ channel_id: 7984292 })], users, channels);
+
+            expect(out.username).toBe('Orlaghs');
+            expect(out.avatar).toBe('https://hugh.cdn.rumble.cloud/channel.png');
+            expect(out.is_verified).toBe(true); // badges stay with the account
+        });
+
+        it('shows the account when no channel is set', async () => {
+            const [out] = await rumble.prepareChatMessages([message({})], users, channels);
+            expect(out.username).toBe('OrlynDp');
+            expect(out.avatar).toBe('https://hugh.cdn.rumble.cloud/user.jpeg');
+        });
+
+        it('falls back to the account when the channel is missing', async () => {
+            const [out] = await rumble.prepareChatMessages([message({ channel_id: '1' })], users, []);
+            expect(out.username).toBe('OrlynDp');
+        });
+
+        it('matches user ids of either type', async () => {
+            const [out] = await rumble.prepareChatMessages([message({ user_id: 286098814 })], users);
+            expect(out?.username).toBe('OrlynDp');
+        });
+
+        it('names a gift buyer by channel too', async () => {
+            const gift = message({ text: '', channel_id: '7984292', gift_purchase_notification: { total_gifts: 2 } });
+            const [sub] = await rumble.prepareSubscriptions([gift], users, channels);
+            expect(sub.buyer).toBe('Orlaghs');
+        });
+
+        it('passes channels from a messages frame through', () => {
+            rumble.receiveChatPairs = vi.fn();
+            rumble.recorder = { recordEventSource: vi.fn() };
+            const data = { messages: [message({ channel_id: '7984292' })], users, channels };
+            rumble.onEventSourceMessage({ url: '' }, { data: JSON.stringify({ type: 'messages', data }) });
+            expect(rumble.receiveChatPairs).toHaveBeenCalledWith(data.messages, users, channels);
+        });
+    });
+
     describe('Channel detection', () => {
         it('reads the video id from a pop-out chat path', () => {
             expect(Rumble.popupVideoId('/chat/popup/443918684')).toBe('443918684');

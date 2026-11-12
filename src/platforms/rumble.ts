@@ -41,19 +41,33 @@ interface RumbleWatchingNow {
 }
 
 interface RumbleUser {
-    id: string;
+    id: string | number;
     username: string;
     'image.1'?: string;
     badges?: string[];
 }
 
+/**
+ * A channel a user can post as, from `data.channels[]`, e.g.
+ * `{"id":"1134193","username":"DueDissidence","link":"/c/DueDissidence","image.1":"https://..."}`.
+ */
+interface RumbleChannelPersona {
+    id: string | number;
+    username: string;
+    'image.1'?: string;
+}
+
 interface RumbleMessage {
     id: string;
-    user_id: string;
+    user_id: string | number;
+    /** Set when the user posted as one of their channels; Rumble shows the channel. */
+    channel_id?: string | number | null;
     text: string;
     time: string;
     rant?: {
         price_cents: number;
+        duration?: number;
+        expires_on?: string;
     };
     notification?: unknown;
     gift_purchase_notification?: {
@@ -76,6 +90,7 @@ interface RumbleEventSourceData {
         /** `init` and `messages` */
         messages: RumbleMessage[];
         users: RumbleUser[];
+        channels?: RumbleChannelPersona[];
         /** `delete_messages` */
         message_ids?: (string | number)[];
         /** `mute_users`, e.g. `{"type":"mute_users","data":{"user_ids":[286098814]}}` */
@@ -276,14 +291,34 @@ export class Rumble extends Seed {
         return emoteCount;
     }
 
-    receiveChatPairs(messages: RumbleMessage[], users: RumbleUser[]): void {
-        this.prepareSubscriptions(messages, users).then((data) => {
+    /**
+     * Who Rumble shows as a message's author: the channel it was posted as when
+     * `channel_id` is set, otherwise the account. Badges stay with the account.
+     */
+    static findAuthor(
+        messageData: RumbleMessage,
+        users: RumbleUser[],
+        channels: RumbleChannelPersona[] = []
+    ): { user: RumbleUser; author: RumbleUser | RumbleChannelPersona } | null {
+        const user = users.find((user) => String(user.id) === String(messageData.user_id));
+        if (user === undefined) return null;
+
+        const channelId = messageData.channel_id;
+        const persona = channelId !== undefined && channelId !== null
+            ? channels.find((channel) => String(channel.id) === String(channelId))
+            : undefined;
+
+        return { user, author: persona ?? user };
+    }
+
+    receiveChatPairs(messages: RumbleMessage[], users: RumbleUser[], channels: RumbleChannelPersona[] = []): void {
+        this.prepareSubscriptions(messages, users, channels).then((data) => {
             data.forEach((datum) => {
                 if (datum) this.receiveSubscriptions(datum);
             });
         });
 
-        this.prepareChatMessages(messages, users).then((data) => {
+        this.prepareChatMessages(messages, users, channels).then((data) => {
             this.sendChatMessages(data);
         });
 
@@ -334,7 +369,7 @@ export class Rumble extends Seed {
         return ids;
     }
 
-    prepareChatMessages(messages: RumbleMessage[], users: RumbleUser[]): Promise<ChatMessage[]> {
+    prepareChatMessages(messages: RumbleMessage[], users: RumbleUser[], channels: RumbleChannelPersona[] = []): Promise<ChatMessage[]> {
         return Promise.all(messages
             .filter((messageData) => {
                 return messageData.text.trim() !== '';
@@ -346,11 +381,12 @@ export class Rumble extends Seed {
                     this.channel!
                 );
 
-                const user = users.find((user) => user.id === messageData.user_id);
-                if (user === undefined) {
+                const found = Rumble.findAuthor(messageData, users, channels);
+                if (found === null) {
                     this.log('User not found:', messageData.user_id);
                     return null;
                 }
+                const { user, author } = found;
 
                 message.sent_at = Date.parse(messageData.time);
                 message.message = messageData.text;
@@ -365,9 +401,9 @@ export class Rumble extends Seed {
                     }
                 }
 
-                message.username = user.username;
-                if (user['image.1'] !== undefined) {
-                    message.avatar = user['image.1'];
+                message.username = author.username;
+                if (author['image.1'] !== undefined) {
+                    message.avatar = author['image.1'];
                 }
 
                 if (user.badges !== undefined) {
@@ -408,18 +444,19 @@ export class Rumble extends Seed {
             })).then(msgs => msgs.filter((m): m is ChatMessage => m !== null));
     }
 
-    prepareSubscriptions(messages: RumbleMessage[], users: RumbleUser[]): Promise<(RumbleSubscription | undefined)[]> {
+    prepareSubscriptions(messages: RumbleMessage[], users: RumbleUser[], channels: RumbleChannelPersona[] = []): Promise<(RumbleSubscription | undefined)[]> {
         return Promise.all(messages
             .filter(messageData =>
                 Object.prototype.hasOwnProperty.call(messageData, 'notification') ||
                 Object.prototype.hasOwnProperty.call(messageData, 'gift_purchase_notification')
             )
             .map(async (messageData) => {
-                const user = users.find((user) => user.id === messageData.user_id);
-                if (user === undefined) {
+                const found = Rumble.findAuthor(messageData, users, channels);
+                if (found === null) {
                     this.log('User not found:', messageData.user_id);
                     return undefined;
                 }
+                const buyer = found.author.username;
 
                 // Gift subscription purchase
                 if (messageData.gift_purchase_notification) {
@@ -427,7 +464,7 @@ export class Rumble extends Seed {
                     return {
                         id: messageData.id,
                         gifted: true,
-                        buyer: user.username,
+                        buyer,
                         count: gift.total_gifts || 1,
                         value: 5
                     };
@@ -437,7 +474,7 @@ export class Rumble extends Seed {
                 return {
                     id: messageData.id,
                     gifted: false,
-                    buyer: user.username,
+                    buyer,
                     count: 1,
                     value: 5
                 };
@@ -450,7 +487,7 @@ export class Rumble extends Seed {
             switch (json.type) {
                 case 'init':
                 case 'messages':
-                    this.receiveChatPairs(json.data.messages, json.data.users);
+                    this.receiveChatPairs(json.data.messages, json.data.users, json.data.channels ?? []);
                     this.recorder.recordEventSource(es.url, event.data, EventStatus.HANDLED, {
                         type: json.type,
                         messageCount: json.data.messages?.length || 0,
